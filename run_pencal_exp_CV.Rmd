@@ -43,7 +43,7 @@ n_fold <- 10
 seed <- 722 # Vary this for repeated CV
 
 
-set_scenario <- "scenario2"
+set_scenario <- "scenario1"
 
 baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4")
 
@@ -60,8 +60,8 @@ data.long <- df.long_censored_prc
 # Initialize
 # -----------------------------------------------------------------------------------
 folds <- Initialize_exp(data.surv, data.long, set_scenario, n_fold, seed)
-
-save(folds, file = "output_folds_template.RData")
+tmp <- paste0("output_folds_template_", set_scenario, "_seed", seed, ".RData")
+save(folds, file = tmp)
 # -----------------------------------------------------------------------------------
 ```
 
@@ -77,7 +77,7 @@ for (i in 1:n_fold) {
   print("---------------------------------------------------------------------------------------------------")
   # -----------------------------------------------------------------------------------
   # General - Subset subjects for fold i
-  # -----------------------------------------------------------------------------------
+  # -------------------------------------------------------------]----------------------
   tmp <- Get_train_test_data(
     data.surv, data.long, 
     folds[[i]]$ids.test,
@@ -120,7 +120,8 @@ for (i in 1:n_fold) {
 
 
 ```{r}
-save(folds, file = "./model/model_scenario2_pencal_scaled_seed722.RData")
+tmp <- paste0("./model/model_", set_scenario, "_pencal_", is_scaled, "_seed", seed, ".RData")
+save(folds, file = tmp)
 ```
 
 
@@ -132,10 +133,10 @@ save(folds, file = "./model/model_scenario2_pencal_scaled_seed722.RData")
 warning did not set any landmark time???
 ```{r}
 # landmark time
-T.start <- 0.5
+T.start <- 0
 
 # a set of prediction windows
-deltaT <- 1:10
+deltaT <- 1:(10 - T.start)
 ```
 
 ## Testing
@@ -223,7 +224,7 @@ for (i in 1:n_fold) {
   # -----------------------------------------------------------------------------------
   # Compute tdROC and tdAUC
   # -----------------------------------------------------------------------------------
-  res.tdauc <- Evaluate_tdauc(surv.new, linpred, deltaT)
+  res.tdauc <- Evaluate_tdauc(surv.new, linpred, T.start, deltaT)
   # -----------------------------------------------------------------------------------
   # Compute c-index
   # -----------------------------------------------------------------------------------
@@ -252,13 +253,11 @@ for (i in 1:n_fold) {
 
 ```
 
-
-
-
-
 ```{r}
-save(folds.eval, file = "./output/eval_scenario2_pencal_scaled_seed722.RData")
+tmp <- paste0("./output/eval_", set_scenario, "_pencal_", is_scaled, "_seed", seed, ".RData")
+save(folds.eval, file = tmp)
 ```
+
 
 ```{r}
 print("cv.c-index")

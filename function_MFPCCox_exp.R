@@ -56,7 +56,8 @@ Train_MFPCCox <- function(
     multivar,
     subject.id,
     y.names,
-    argvals
+    argvals,
+    pve
     ) {
   # -----------------------------------------------------------------------------------  
   # MFPCCpx - Get multivar array
@@ -68,7 +69,7 @@ Train_MFPCCox <- function(
   # -----------------------------------------------------------------------------------
   # MFPCCpx Step 1 - Apply univariate FPCA using PACE algorithm
   # -----------------------------------------------------------------------------------
-  print("Apply univariate FPCA")
+  print("Step 1 univariate FPCA")
   t.start <- Sys.time()
   
   # Initialize variables
@@ -78,13 +79,13 @@ Train_MFPCCox <- function(
   meanFun.train <- NULL # meanFun = mean function
   
   for(p in 1:n.y) { # for each long covariate
-#    print(paste("Apply uFPCA to", y.names[p])) # Uncomment to debug
+    print(paste("Apply uFPCA to", y.names[p])) # Uncomment to debug
     
     # wrapper for PACE
     tmp.ufpca <- uPACE(
       testData = multivar.train[, , p], 
       domain = argvals, # scaled obstime in [0,1]
-      pve = 0.95,
+      pve = pve,
       nbasis = 3) 
     # nbasis: representing the number of B-spline basis functions used for estimation of the mean function and bivariate smoothing of the covariance surface. Defaults to 10
     
@@ -101,7 +102,7 @@ Train_MFPCCox <- function(
   # -----------------------------------------------------------------------------------
   # MFPCCpx Step 2 - Apply multivariate FPCA on uFPCA outputs
   # -----------------------------------------------------------------------------------
-  print("Apply MFPCA")
+  print("Step 2 MFPCA")
   t.start <- Sys.time()
   
   mFPCA.train <- mFPCA(
@@ -122,6 +123,7 @@ Train_MFPCCox <- function(
   # -----------------------------------------------------------------------------------
   # MFPCCpx Step 3 - Fit Cox model
   # -----------------------------------------------------------------------------------
+  print("Step 3 Cox")
   t.start <- Sys.time()
   
   # Extract scores

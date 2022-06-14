@@ -88,6 +88,18 @@ n_fold <- 10
 
 
 
+```{r}
+string <- models.path[1]
+stringr::str_remove_all(string, c("eval_", ".RData"), "")
+
+sapply(models.path, function(x) {
+  x <- stringr::str_remove_all(x, "eval_")
+  x
+})
+
+
+  
+```
 
 
 
@@ -100,34 +112,55 @@ n_fold <- 10
 # Summarize tdAUC results
 # ------------------------------------------------------------------------------------------------
 
+# Load path to eval results
+models.path <- list.files(path = "./output")
+models.name <- stringr::str_remove_all(stringr::str_remove_all(models.path, ".RData"), "eval_")
+
 # Initialize
 df.tdauc.compare <- data.frame()
-
-# Repeat the following steps for different methods
-
-# Result 1
-df.tdauc <- Summarize.tdAUC(
-  method = "pencal", 
-  path = "res_pencal_eval_cv_allcov.RData", 
-  n_fold = n_fold, 
-  detlaT = deltaT
-  )
-
-df.tdauc.compare <- df.tdauc
-
-# Result 2
-df.tdauc <- Summarize.tdAUC(
-  method = "pCox", 
-  path = "res_pcox_eval_cv_5cov.RData", 
-  n_fold = n_fold, 
-  detlaT = deltaT
-  )
-
-# Combine results from other methods to compare dataframe
-df.tdauc.compare <- df.tdauc.compare %>%
-  add_row(df.tdauc)
+# ------------------------------------------------------------------------------------------------
 
 
+
+# Repeat the following steps for different models
+
+for (i in 1:length(models.name)) {
+  
+  if (i == 1) {
+    # Result 1
+    df.tdauc <- Summarize.tdAUC(
+      model = models.name[i], 
+      path = paste0("./output/", models.path[i]), 
+      n_fold = n_fold, 
+      detlaT = deltaT
+      )
+    
+    df.tdauc.compare <- df.tdauc
+  }
+
+  # Result i, i > 1
+  df.tdauc <- Summarize.tdAUC(
+    model = models.name[i], 
+    path = paste0("./output/", models.path[i]), 
+    n_fold = n_fold, 
+    detlaT = deltaT
+    )
+  
+  # Combine results from other models to compare dataframe
+  df.tdauc.compare <- df.tdauc.compare %>%
+    add_row(df.tdauc)
+}
+
+
+
+
+
+
+save(df.tdauc.compare, file = "./output/compare_tdAUC.RData")
+```
+
+
+```{r, fig.width=8}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
 # ------------------------------------------------------------------------------------------------
@@ -135,8 +168,8 @@ df.tdauc.compare %>%
   ggplot(aes(
     x = prediction_time, 
     y = mean, 
-    group = method,
-    color = method)
+    group = model,
+    color = model)
   ) +
   geom_errorbar(aes(
     ymax = ci.upper,
@@ -145,16 +178,17 @@ df.tdauc.compare %>%
     width = 0.3, size = 0.8
   ) + 
   geom_point() +
-  geom_line(size = 0.5) +
+  geom_line(size = 1, alpha = 0.5) +
   scale_x_continuous(breaks = deltaT) + 
   scale_y_continuous(breaks = 0:10 / 10) +
-  coord_cartesian(ylim = c(0, 1)) +
+  coord_cartesian(ylim = c(0.4, 1)) +
   xlab("Year from landmark time (dt)") + ylab("time-dependent AUC\n(higher is better)") +
   labs(
-    title = "Estimated tdAUC for different methods using 10-fold CV",
+    title = "Estimated tdAUC for different models using 10-fold CV",
     subtitle = "at landmark time (t) = x",
     caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
-  )
-```
+  )  +
+  theme_minimal()
 
+```
 

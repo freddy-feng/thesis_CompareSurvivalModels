@@ -3,19 +3,21 @@
 # ------------------------------------------------------------------------------------------------
 require(survivalROC)
 
-Evaluate_tdauc <- function(surv.new, linpred.orig, deltaT) {
+Evaluate_tdauc <- function(surv.new, linpred, T.start, deltaT) {
   res.tp <- vector(mode = "list", length = length(deltaT))
   res.fp <- vector(mode = "list", length = length(deltaT))
   res.tdauc <- vector(mode = "numeric", length = length(deltaT))
   
   for (j in 1:length(deltaT)) {
     
-    predict.time <- deltaT[j]
+    predict.time <- T.start + deltaT[j]
+    
+#    print(predict.time)
     
     temp <- survivalROC::survivalROC(
       Stime = surv.new$time, # Event time or censoring time for subjects
       status = surv.new$event, # Indicator of status, 1 if death or event, 0 otherwise
-      marker = linpred.orig, # Predictor or marker value
+      marker = linpred, # Predictor or marker value
       entry = NULL, # Entry time for the subjects, default is NULL, why 0?
       predict.time = predict.time, # Time point of the ROC curve
       cut.values = NULL, # marker values to use as a cut-off for calculation of sensitivity and specificity

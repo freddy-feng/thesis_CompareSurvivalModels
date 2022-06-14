@@ -229,8 +229,8 @@ check_folds <- function (surv, folds) {
 # ------------------------------------------------------------------------------------------------
 # Summarize tdAUC in different folds from folds.eval and output dataframe
 # ------------------------------------------------------------------------------------------------
-Summarize.tdAUC <- function(method, path, n_fold, detlaT) {
-  # Load results to folds.eval list for corresponding method
+Summarize.tdAUC <- function(model, path, n_fold, detlaT) {
+  # Load results to folds.eval list for corresponding model
   load(path)
   
   # Extract from folds.eval into list of tdAUC
@@ -259,7 +259,7 @@ Summarize.tdAUC <- function(method, path, n_fold, detlaT) {
   
   df.tdauc$prediction_time <- as.numeric(df.tdauc$prediction_time)
   df.tdauc <- df.tdauc %>% arrange(prediction_time)
-  df.tdauc$method <- method
+  df.tdauc$model <- model
   
   return(df.tdauc)
 }

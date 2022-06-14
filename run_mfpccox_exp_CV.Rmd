@@ -35,7 +35,7 @@ load("adni_cleaned_prc.RData")
 
 
 ```{r}
-load(file = "output_folds_template.RData")
+load(file = "output_folds_template_scenario1_seed.RData")
 ```
 
 
@@ -58,6 +58,8 @@ basecov.names <- folds[[1]]$baseline.covs
 # Use candidate long covariates as basis, then drop covariates that reported error
 candidate.long.covs <- folds[[1]]$candidate.long.covs
 y.names <- candidate.long.covs[!(candidate.long.covs %in% c("Fusiform", "Ventricles", "WholeBrain", "ICV"))] 
+#y.names <- candidate.long.covs
+
 n.y <- length(y.names) # number of long covariates
 
 # time variable for longitudinal variable y
@@ -65,6 +67,11 @@ n.y <- length(y.names) # number of long covariates
 #y.t <- "M" # use months from baseline instead of years from baseline, less possible values in obstime
 y.t <- "Y" # generic, use years from baseline, rounded
 ```
+
+
+
+
+
 
 ## Prepare the multivar array
 
@@ -100,8 +107,9 @@ multivar <- Convert_long_to_mvarray(
   n_subject = nPat, 
   y.names = y.names, 
   n.y = n.y)
+  
+dim(multivar)
 ```
-
 
 
 # Train
@@ -111,6 +119,7 @@ At this stage, folds list for cross validation should be initiated.
 
 ```{r}
 is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
+pve <- 0.7
 
 # -----------------------------------------------------------------------------------
 # Fit models for each fold
@@ -138,7 +147,8 @@ for (i in 1:n_fold) {
       multivar, # Converted long data
       subject.id, # Vector of subject ids corresponding to multivar
       y.names, # Candidate long covariates
-      argvals # Scaled time domain
+      argvals, # Scaled time domain
+      pve
       )
   
   # -----------------------------------------------------------------------------------
@@ -148,7 +158,9 @@ for (i in 1:n_fold) {
     mfpccox = res$mfpccox,
     mfpca = res$mfpca,
     y.names = res$y.names,
-    runtimes = res$runtimes
+    runtimes = res$runtimes,
+    subject.id = subject.id,
+    pve = pve
   )
   # -----------------------------------------------------------------------------------
 }
@@ -156,7 +168,8 @@ for (i in 1:n_fold) {
 ```
 
 ```{r}
-save(folds, file = "./model/model_scenario2_MFPCCox_scaled.RData")
+tmp <- paste0("./model/model_", set_scenario, "_MFPCCox_", is_scaled, "_seed", seed, ".RData")
+save(folds, file = tmp)
 ```
 
 # Test
@@ -168,12 +181,13 @@ i fail at tstart = 0.5, deltaT = 0.5
 
 ```{r}
 # landmark time
-T.start <- 0.5
+T.start <- 0
 
 # a set of prediction windows
-delta.T <- 1:10
-
+deltaT <- 1:(10 - T.start)
 ```
+
+requires subject.id and multivar outside the training loop
 
 ```{r}
 folds.eval <- vector(mode = "list", length = n_fold)
@@ -230,12 +244,16 @@ for (i in 1:n_fold) {
   Xi.test <- NULL # Xi: FPC scores
   
   for(p in 1:n.y){ # for each longitudinal covariate
+    
+    pve <- folds[[i]]$mfpccox$pve
+    
     tmp.ufpca <- uPACE(
       testData = multivar.train[, , p], # Specific to train set in each fold
       domain = argvals, 
       predData = tmp.data[ , , p], 
       nbasis = 3,
-      pve = 0.95) # run uPACE that wraps PACE and supply data
+      pve = pve) # run uPACE that wraps PACE and supply data
+    
     Xi.test <- cbind(Xi.test, tmp.ufpca$scores) # dynamic FPC scores for test subjects 
   }
   # -----------------------------------------------------------------------------------  
@@ -264,7 +282,7 @@ for (i in 1:n_fold) {
   # -----------------------------------------------------------------------------------
   # Compute tdROC and tdAUC
   # -----------------------------------------------------------------------------------
-  res.tdauc <- Evaluate_tdauc(surv.new, linpred, deltaT)
+  res.tdauc <- Evaluate_tdauc(surv.new, linpred, T.start, deltaT)
   # -----------------------------------------------------------------------------------
   # Compute c-index
   # -----------------------------------------------------------------------------------
@@ -294,7 +312,8 @@ for (i in 1:n_fold) {
 ```
 
 ```{r}
-save(folds.eval, file = "./output/eval_scenario2_MFPCCox_scaled.RData")
+tmp <- paste0("./output/eval_", set_scenario, "_MFPCCox_", is_scaled, "_seed", seed, ".RData")
+save(folds.eval, file = tmp)
 ```
 
 

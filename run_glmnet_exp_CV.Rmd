@@ -25,7 +25,7 @@ source("function_utility_exp.R")
 Share the same procedure in pencal.
 
 ```{r}
-load(file = "output_folds_template.RData")
+load(file = "output_folds_template_scenario1_seed.RData")
 ```
 
 
@@ -85,7 +85,8 @@ for (i in 1:n_fold) {
 ```
 
 ```{r}
-save(folds, file = "./model/model_scenario2_pCox_scaled.RData")
+tmp <- paste0("./model/model_", set_scenario, "_pCox_", is_scaled, "_seed", seed, ".RData")
+save(folds, file = tmp)
 ```
 
 
@@ -97,10 +98,10 @@ should i vary the landmark time???
 
 ```{r}
 # landmark time
-T.start <- 0.5
+T.start <- 0
 
 # a set of prediction windows
-deltaT <- 1:10
+deltaT <- 1:(10 - T.start)
 ```
 
 ```{r}
@@ -176,7 +177,7 @@ for (i in 1:n_fold) {
   # -----------------------------------------------------------------------------------
   # Compute tdROC and tdAUC
   # -----------------------------------------------------------------------------------
-  res.tdauc <- Evaluate_tdauc(surv.new, linpred, deltaT)
+  res.tdauc <- Evaluate_tdauc(surv.new, linpred, T.start, deltaT)
   # -----------------------------------------------------------------------------------
   # Compute c-index
   # -----------------------------------------------------------------------------------
@@ -205,7 +206,8 @@ for (i in 1:n_fold) {
 ```
 
 ```{r}
-save(folds.eval, file = "./output/eval_scenario2_pCox_scaled.RData")
+tmp <- paste0("./output/eval_", set_scenario, "_pCox_", is_scaled, "_seed", seed, ".RData")
+save(folds.eval, file = tmp)
 ```
 
 # Inpsect results
