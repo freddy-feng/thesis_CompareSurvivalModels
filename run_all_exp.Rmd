@@ -1,0 +1,160 @@
+---
+title: "comparison"
+author: "Yibin Feng"
+date: '2022-06-13'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dependencies
+```{r}
+library(tidyverse)
+
+source("function_utility_exp.R")
+
+```
+
+
+# Experiment schedule
+
+```{r}
+exp.table <- data.frame(do.call(rbind, list(
+  c("scenario2", "pencal", "scaled"),
+  c("scenario2", "pCox", "scaled"),
+  c("scenario2", "MFPCCox", "scaled")
+  )))
+
+colnames(exp.table) <- c(
+  "scenario",
+  "method",
+  "scaling"
+)
+
+exp.table <- exp.table %>%
+  unite("model.name", c("scenario", "method", "scaling"), sep = "_", remove = FALSE)
+
+exp.table$data <- "adni_cleaned_prc.RData"
+
+exp.table$path.model <- paste0("./model/model_", exp.table$model.name, ".RData")
+exp.table$path.eval <- paste0("./output/eval_", exp.table$model.name, ".RData")
+
+print("----------------------------------------------------------------------")
+print("Experiment schedule:")
+print(exp.table)
+print("----------------------------------------------------------------------")
+```
+
+```{r}
+n_fold <- 10
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Present result - tdAUC
+```{r}
+# ------------------------------------------------------------------------------------------------
+# Summarize tdAUC results
+# ------------------------------------------------------------------------------------------------
+
+# Initialize
+df.tdauc.compare <- data.frame()
+
+# Repeat the following steps for different methods
+
+# Result 1
+df.tdauc <- Summarize.tdAUC(
+  method = "pencal", 
+  path = "res_pencal_eval_cv_allcov.RData", 
+  n_fold = n_fold, 
+  detlaT = deltaT
+  )
+
+df.tdauc.compare <- df.tdauc
+
+# Result 2
+df.tdauc <- Summarize.tdAUC(
+  method = "pCox", 
+  path = "res_pcox_eval_cv_5cov.RData", 
+  n_fold = n_fold, 
+  detlaT = deltaT
+  )
+
+# Combine results from other methods to compare dataframe
+df.tdauc.compare <- df.tdauc.compare %>%
+  add_row(df.tdauc)
+
+
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = method,
+    color = method)
+  ) +
+  geom_errorbar(aes(
+    ymax = ci.upper,
+    ymin = ci.lower),
+    alpha = 0.7,
+    width = 0.3, size = 0.8
+  ) + 
+  geom_point() +
+  geom_line(size = 0.5) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0, 1)) +
+  xlab("Year from landmark time (dt)") + ylab("time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Estimated tdAUC for different methods using 10-fold CV",
+    subtitle = "at landmark time (t) = x",
+    caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
+  )
+```
+
+

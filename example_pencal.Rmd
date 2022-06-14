@@ -1,0 +1,137 @@
+---
+title: "pencal_test"
+author: "Yibin Feng"
+date: "3/9/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, eval=FALSE}
+# The R package pencal and all of its dependencies can be installed all in one go using:
+if (!require("BiocManager", quietly = TRUE)) 
+   install.packages("BiocManager") 
+
+
+BiocManager::install("survcomp")
+install.packages("pencal")
+```
+
+
+```{r}
+library(pencal)
+
+n.cores = parallel::detectCores()
+```
+
+
+```{r}
+set.seed(1234) 
+p = 10 
+simdata = simulate_prclmm_data(n = 100, p = p, p.relev = 5,  
+                              lambda = 0.2, nu = 1.5, 
+                              seed = 1234, t.values = c(0, 0.2, 0.5, 1, 1.5, 2)) 
+ls(simdata)
+```
+
+```{r}
+head(simdata$long.data)
+```
+
+```{r}
+head(simdata$surv.data)
+```
+
+```{r}
+simdata$censoring.prop
+```
+
+```{r}
+library(survival)
+library(survminer)
+```
+
+
+```{r}
+surv.obj = survival::Surv(time = simdata$surv.data$time,  
+               event = simdata$surv.data$event) 
+kaplan = survival::survfit(surv.obj ~ 1,   
+                 type="kaplan-meier") 
+survminer::ggsurvplot(kaplan, data = simdata$surv.data)
+```
+
+```{r}
+simdata
+```
+
+
+# Step 1
+
+```{r}
+y.names = paste('marker', 1:p, sep = '') 
+
+step1 = fit_lmms(y.names = y.names,  
+                fixefs = ~ age, ranefs = ~ age | id,  
+                long.data = simdata$long.data,  
+                surv.data = simdata$surv.data, 
+                t.from.base = t.from.base, 
+                n.boots = 10, n.cores = n.cores)
+```
+
+# Step 2
+
+```{r}
+step2 = summarize_lmms(object = step1, n.cores = n.cores)
+```
+
+```{r}
+ls(step2)
+```
+
+
+```{r}
+# view predicted random effects for the first two markers 
+step2$ranef.orig[1:5, 1:4]
+```
+
+# Step 3
+
+```{r}
+step3 = fit_prclmm(object = step2, surv.data = simdata$surv.data, 
+                  baseline.covs = ~ baseline.age, 
+                  penalty = 'ridge', n.cores = n.cores)
+```
+
+```{r}
+ls(step3)
+```
+
+```{r}
+class(step3$pcox.orig)
+```
+
+```{r}
+library(glmnet)
+```
+
+```{r}
+t(as.matrix(coef(step3$pcox.orig)))
+```
+
+# Predict survival probabilities
+
+```{r}
+preds = survpred_prclmm(step1, step2, step3, times = c(1, 2, 3)) 
+ls(preds)
+```
+
+```{r}
+head(preds$predicted_survival)
+```
+
+
+
+
+

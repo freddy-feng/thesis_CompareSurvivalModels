@@ -1,0 +1,465 @@
+---
+title: "Performance measures"
+author: "Yibin Feng"
+date: '2022-05-26'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dependencies
+
+```{r}
+#rm(list = ls())
+
+
+
+```
+
+
+# write into function
+
+```{r}
+
+```
+
+
+# time-dependent AUC
+
+## tldr
+
+- greater is better
+- [0,1]
+- survivalROC()
+
+## package info
+
+survivalROC: Time-dependent ROC curve estimation from censored survival data
+https://rdrr.io/cran/survivalROC/man/survivalROC.html
+This function creates time-dependent ROC curve from censored survival data using the Kaplan-Meier (KM) or Nearest Neighbor Estimation (NNE) method of Heagerty, Lumley and Pepe, 2000
+
+## question about the estimation
+- how will the smoothing parameter (span) affect the estimation?
+
+## Example from package
+
+Suppose we have censored survival data along with a baseline marker value and we want to see how well the marker predicts the survival time for the subjects in the dataset. 
+In particular, suppose we have survival times in days and we want to see how well the marker predicts the one-year survival (predict.time=365 days)
+
+```{r}
+library(survivalROC)
+
+data(mayo)
+
+head(mayo)
+
+nobs <- nrow(mayo) # number of subjects
+cutoff <- 365 # one year
+
+## MAYOSCORE 4, METHOD = NNE
+Mayo4.1 <- survivalROC(
+  Stime = mayo$time, # Event time or censoring time for subjects
+  status = mayo$censor, # Indicator of status, 1 if death or event, 0 otherwise
+  marker = mayo$mayoscore4, # Predictor or marker value
+  predict.time = cutoff, # Time point of the ROC curve
+  method = "NNE", # Method for fitting joint distribution of (marker,t), either of KM or NNE, the default method is NNE
+  span = 0.25 * nobs ^ (-0.20) # Span for the NNE, need either lambda or span for NNE
+  )
+
+plot(
+  Mayo4.1$FP, Mayo4.1$TP, 
+  type = "l", xlim = c(0, 1), ylim = c(0, 1),   
+  xlab = paste( "FP", "\n", "AUC = ", round(Mayo4.1$AUC, 3)), 
+  ylab = "TP",
+  main = "Mayoscore 4, Method = NNE \n  Year = 1")
+abline(0, 1)
+
+## MAYOSCORE 4, METHOD = KM
+Mayo4.2 <- survivalROC(
+  Stime = mayo$time,  
+  status = mayo$censor,      
+  marker = mayo$mayoscore4,     
+  predict.time = cutoff, 
+  method = "KM")
+
+plot(
+  Mayo4.2$FP, Mayo4.2$TP, 
+  type = "l", xlim = c(0, 1), ylim = c(0, 1),   
+  xlab = paste( "FP", "\n", "AUC = ", round(Mayo4.2$AUC, 3)), 
+  ylab = "TP",
+  main = "Mayoscore 4, Method = KM \n Year = 1")
+abline(0, 1)
+```
+
+```{r}
+ls(Mayo4.1)
+```
+
+cut.values
+unique marker values for calculation of TP and FP
+
+TP
+True Positive corresponding to the cut offs in marker
+
+FP
+False Positive corresponding to the cut offs in marker
+
+predict.time
+time point of interest
+
+Survival
+Kaplan-Meier survival estimate at predict.time
+
+AUC
+Area Under (ROC) Curve at time predict.time
+
+```{r}
+Mayo4.1$AUC # Area Under (ROC) Curve at time predict.time
+
+Mayo4.1$Survival
+```
+
+## comparing models
+mayoscore4, mayoscore5. The two scores are derived from 4 and 5 covariates
+
+```{r}
+## MAYOSCORE 4, METHOD = NNE
+Mayo4.1 <- survivalROC(
+  Stime = mayo$time, # Event time or censoring time for subjects
+  status = mayo$censor, # Indicator of status, 1 if death or event, 0 otherwise
+  marker = mayo$mayoscore4, # Predictor or marker value
+  predict.time = cutoff, # Time point of the ROC curve
+  method = "NNE", # Method for fitting joint distribution of (marker,t), either of KM or NNE, the default method is NNE
+  span = 0.25 * nobs ^ (-0.20) # Span for the NNE, need either lambda or span for NNE
+  )
+
+plot(
+  Mayo4.1$FP, Mayo4.1$TP, 
+  type = "l", xlim = c(0, 1), ylim = c(0, 1),   
+  xlab = paste( "FP", "\n", "AUC = ", round(Mayo4.1$AUC, 3)), 
+  ylab = "TP",
+  main = "Mayoscore 4, Method = NNE \n  Year = 1")
+abline(0, 1)
+
+
+## MAYOSCORE 5, METHOD = NNE
+Mayo4.1 <- survivalROC(
+  Stime = mayo$time, # Event time or censoring time for subjects
+  status = mayo$censor, # Indicator of status, 1 if death or event, 0 otherwise
+  marker = mayo$mayoscore5, # Predictor or marker value
+  predict.time = cutoff, # Time point of the ROC curve
+  method = "NNE", # Method for fitting joint distribution of (marker,t), either of KM or NNE, the default method is NNE
+  span = 0.25 * nobs ^ (-0.20) # Span for the NNE, need either lambda or span for NNE
+  )
+
+plot(
+  Mayo4.1$FP, Mayo4.1$TP, 
+  type = "l", xlim = c(0, 1), ylim = c(0, 1),   
+  xlab = paste( "FP", "\n", "AUC = ", round(Mayo4.1$AUC, 3)), 
+  ylab = "TP",
+  main = "Mayoscore 5, Method = NNE \n  Year = 1")
+abline(0, 1)
+```
+
+
+
+
+## different span in hyperparameter
+
+
+```{r}
+(span1 <- 0.05) # literature example, moderate smoothing
+(span2 <- 0.25 * nobs ^ (-0.20)) # in pencal
+(span3 <- nobs ^ (-1/3))
+
+# plot by smoothing parameter from small to large
+for (span in c(span1, span2, span3)) {
+  Mayo4.1 <- survivalROC(
+    Stime = mayo$time, # Event time or censoring time for subjects
+    status = mayo$censor, # Indicator of status, 1 if death or event, 0 otherwise
+    marker = mayo$mayoscore4, # Predictor or marker value
+    predict.time = cutoff, # Time point of the ROC curve
+    method = "NNE", # Method for fitting joint distribution of (marker,t), either of KM or NNE, the default method is NNE
+    span = span # Span for the NNE, need either lambda or span for NNE
+    )
+  
+  plot(
+    Mayo4.1$FP, Mayo4.1$TP, 
+    type = "l", xlim = c(0, 1), ylim = c(0, 1),   
+    xlab = paste( "FP", "\n", "AUC = ", round(Mayo4.1$AUC, 3)), 
+    ylab = "TP",
+    main = "Mayoscore 4, Method = NNE \n  Year = 1")
+  abline(0, 1)
+}
+
+
+```
+tdROC using wrapper in survcomp package
+```{r}
+set.seed(12345)
+
+n_sample <- 100 # sample size
+
+span <- 0.25 * n_sample^(-0.2)
+
+# simulate data
+age <- rnorm(n_sample, 50, 10) # predictor
+stime <- rexp(n_sample) # survival time
+cens   <- runif(n_sample, 0.5, 2) # censoring
+sevent  <- as.numeric(stime <= cens) # survival outcome
+stime <- pmin(stime, cens) # survival time
+
+# use wrapper
+tdroc.survcomp <- survcomp::tdrocc(
+  x = age,
+  surv.time = stime,
+  surv.event = sevent,
+  time = 1,
+  na.rm = TRUE,
+  verbose = FALSE,
+  span = span
+)
+
+# plot
+plot(x = 1 - tdroc.survcomp$spec, 
+     y = tdroc.survcomp$sens,
+     type = "l",
+     xlim = c(0, 1), ylim = c(0, 1),
+     xlab = paste("1-specificity", "\n", "AUC = ", round(tdroc.survcomp$AUC, 3)), 
+     ylab = "sensitivity",
+     main = "by survcomp::tdrocc()")
+abline(a = 0, b = 1, col = "red")
+
+# compare with survivalROC
+tdroc.survroc <- survivalROC::survivalROC(
+  Stime = stime, # Event time or censoring time for subjects
+  status = sevent, # Indicator of status, 1 if death or event, 0 otherwise
+  marker = age, # Predictor or marker value
+  predict.time = 1, # Time point of the ROC curve
+  span = span,
+  )
+
+plot(
+  x = tdroc.survroc$FP,
+  y = tdroc.survroc$TP,
+  type = "l", 
+  xlim = c(0, 1), ylim = c(0, 1),   
+  xlab = paste("FP", "\n", "AUC = ", round(tdroc.survroc$AUC, 3)), 
+  ylab = "TP",
+  main = "by survivalROC::survivalROC()")
+abline(a = 0, b = 1, col = "red")
+
+```
+
+apply wrapper from survcomp to survivalROC data, another cross validate
+```{r}
+nobs <- nrow(mayo) # number of subjects
+cutoff <- 365 # one year
+
+
+# use wrapper
+tdroc.survcomp <- survcomp::tdrocc(
+  x = mayo$mayoscore4,
+  surv.time = mayo$time,
+  surv.event = mayo$censor,
+  time = cutoff,
+  na.rm = TRUE,
+  verbose = FALSE,
+  span = 0.25 * nobs ^ (-0.20)
+)
+
+# plot
+plot(x = 1 - tdroc.survcomp$spec, 
+     y = tdroc.survcomp$sens,
+     type = "l",
+     xlim = c(0, 1), ylim = c(0, 1),
+     xlab = paste("1-specificity", "\n", "AUC = ", round(tdroc.survcomp$AUC, 3)), 
+     ylab = "sensitivity",
+     main = "by survcomp::tdrocc()")
+abline(a = 0, b = 1, col = "red")
+```
+
+
+# concordance C-index
+
+## tldr
+- overall C index for comparable pairs
+- concordance means subject with higher risk prediction has shorter survival time, vice versa
+- concordance.index(): function to compute the concordance index for survival or binary class prediction
+
+## package info
+- https://www.bioconductor.org/packages/release/bioc/html/survcomp.html
+- https://www.rdocumentation.org/packages/survcomp/versions/1.22.0/topics/concordance.index 
+
+- Harrel Jr, F. E. and Lee, K. L. and Mark, D. B. (1996)
+- Pencina, M. J. and D’Agostino, R. B. (2004)
+
+## Example from package
+
+
+```{r}
+set.seed(12345)
+
+n_sample <- 100 # sample size
+
+# simulate data
+age <- rnorm(n_sample, 50, 10) # predictor
+sex <- sample(0:1, n_sample, replace = TRUE) # response
+stime <- rexp(n_sample) # survival time
+cens   <- runif(n_sample, 0.5, 2) # censoring
+sevent  <- as.numeric(stime <= cens) # survival outcome
+stime <- pmin(stime, cens) # survival time
+
+# c-index arguments
+strat <- sample(1:3, n_sample, replace = TRUE)
+weight <- runif(n_sample, min = 0, max = 1)
+comppairs <- 10
+
+cat("survival prediction:\n")
+res.concordance.1 <- survcomp::concordance.index(
+  x = age, # vector of risk predictions
+  surv.time = stime, # vector of event times
+  surv.event = sevent, # vector of event occurence indicators
+  strat = strat, # stratification indicator
+  weights = weight, # weight of each sample
+  method = "noether", # value conservative, noether or name (see paper Pencina et al. for details)
+  comppairs = comppairs) # number of compairable pairs
+
+cat("binary class prediction:\n")
+## is age predictive of sex?
+res.concordance.2 <- survcomp::concordance.index(
+  x = age, 
+  cl = sex, # vector of binary class indicators
+  strat = strat,
+  method = "noether")
+```
+```{r}
+ls(res.concordance.1)
+```
+
+question: 
+- what hypothesis is se, lower, upper, p.value related to?
+- what is the difference between n and comppairs
+
+
+
+
+
+# Brier Score
+
+
+
+
+
+
+
+
+# Understanding code from performance_prc()
+
+https://www.r-bloggers.com/2020/03/a-deep-dive-into-glmnet-predict-glmnet/
+
+### for survival::predict.coxph:
+
+argument `type`
+the type of predicted value. Choices are the linear predictor ("lp"), the risk score exp(lp) ("risk"), the expected number of events given the covariates and follow-up time ("expected"), and the terms of the linear predictor ("terms"). The survival probability for a subject is equal to exp(-expected).
+
+### for glmnet::predict.glmnet
+
+argument `type`
+type = "link" (default) returns x^T \beta, where \beta is the coefficient vector corresponding to a \lambda value in s
+type = "response" return predictions on the y scale, for “cox” it returns fitted relative risk
+
+argument `s`
+Value(s) of the penalty parameter lambda at which predictions are required. Default is the value s="lambda.1se" stored on the CV object. 
+Alternatively s="lambda.min" can be used. If s is numeric, it is taken as the value(s) of lambda to be used. (For historical reasons we use the symbol ’s’ rather than ’lambda’ to reference this parameter)
+
+### What is relative risk?
+
+The hazard ratio differs from the relative risk and odds ratio. 
+The hazard ratio represents the difference in the risk of an event at any given time, whereas the relative risk or odds ratio usually represents the cumulative risk over a period of time.
+
+
+
+
+```{r}
+ranef.orig = step2$ranef.orig
+baseline.covs = step3$call$baseline.covs
+pcox.orig = step3$pcox.orig
+surv.data = step3$surv.data
+
+surv.orig = Surv(time = surv.data$time, event = surv.data$event)
+
+
+# obtain X
+# only longitudinal, no baseline covariate
+if (is.null(baseline.covs)) {
+  X.orig = as.matrix(ranef.orig)
+}
+
+# with baseline covariate
+if (!is.null(baseline.covs)) {
+  X0 = model.matrix(as.formula(baseline.covs), data = surv.data)
+  X.orig = as.matrix(cbind(X0, ranef.orig)) # join the baseline covariates and random effect summary
+  
+  # drop intercept
+  contains.int = "(Intercept)" %in% colnames(X.orig)
+  if (contains.int) {
+    X.orig = X.orig[, -1]
+  }
+}
+
+
+
+
+
+
+# obtain the relative risk by predict method on fitted model
+relrisk.orig = predict(
+  pcox.orig, # Fitted "cv.glmnet" or "cv.relaxed" object
+  newx = X.orig, # Matrix of new values for x at which predictions are to be made. Must be a matrix
+  s = "lambda.min",
+  type = "response" # Type "response" gives the ﬁtted values (mu scale)
+  )
+
+c.naive = concordance.index(
+  x = relrisk.orig, # vector of risk predictions
+  surv.time = surv.data$time, # vector of event times
+  surv.event = surv.data$event, # vector of event occurence indicators
+  method = "noether" # conservative, noether or name (see paper Pencina et al. for details)
+  )
+
+c.out$n.boots = n.boots
+check = !inherits(c.naive, "try-error")
+c.out$naive = ifelse(check, round(c.naive$c.index, 4), NA) # c.index: concordance index estimate.
+
+
+
+
+pmle.orig = as.numeric(coef(pcox.orig, s = "lambda.min")) # extract coefficients
+linpred.orig = X.orig %*% pmle.orig # matmul of beta and X
+
+
+# compute tdAUC for various predict times T+deltaT
+tdauc.naive = foreach(i = 1:n.times, .combine = "c") %do% 
+  {
+    auc = try(survivalROC(
+      Stime = surv.data$time, # Event time or censoring time for subjects
+      status = surv.data$event, # Indicator of status, 1 if death or event, 0 otherwise
+      marker = linpred.orig, # Predictor or marker value
+      entry = rep(0, n), # Entry time for the subjects, default is NULL, why 0?
+      predict.time = times[i], # Time point of the ROC curve
+      cut.values = NULL, # marker values to use as a cut-off for calculation of sensitivity and specificity
+      method = "NNE", 
+      span = 0.25 * n^(-0.2) # small span yield moderate smoothing
+      ))
+    check = !inherits(auc, "try-error") & !is.nan(auc$AUC)
+    out = ifelse(check, round(auc$AUC, 4), NA)
+  }
+
+tdauc.out$naive = tdauc.naive
+  
+```
+
+

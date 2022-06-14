@@ -1,0 +1,276 @@
+---
+title: "Untitled"
+author: "Yibin Feng"
+date: '2022-06-09'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(tidyverse)
+
+
+source("function_glmnet_exp.R")
+source("function_utility_exp.R")
+```
+
+
+# Load data
+
+Share the same procedure in pencal.
+
+```{r}
+load(file = "output_folds_template.RData")
+```
+
+
+# Train
+
+At this stage, folds list for cross validation should be initiated.
+
+```{r}
+is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
+
+# -----------------------------------------------------------------------------------
+# Fit models for each fold
+# -----------------------------------------------------------------------------------
+for (i in 1:n_fold) {
+  # -----------------------------------------------------------------------------------
+  # General - Subset subjects for fold i
+  # -----------------------------------------------------------------------------------
+  tmp <- Get_train_test_data(
+    data.surv, data.long, 
+    folds[[i]]$ids.test,
+    is_scaled, 
+    folds[[i]]$scaling_table
+    )
+  
+  training.surv <- tmp$training.surv
+  training.long <- tmp$training.long
+  
+  # -----------------------------------------------------------------------------------
+  # pCox
+  # -----------------------------------------------------------------------------------
+  
+  # Baseline covariates used for fitting penalized Cox model in all folds
+  baseline.covs <- folds[[i]]$baseline.covs
+  baseline.covs.additional <- folds[[i]]$candidate.long.covs
+  scenario <- folds[[i]]$scenario
+  
+  res <- Train_glmnet(
+    training.surv,
+    training.long,
+    scenario,
+    baseline.covs,
+    baseline.covs.additional
+  )
+  
+  # -----------------------------------------------------------------------------------
+  # Store results
+  # -----------------------------------------------------------------------------------
+  folds[[i]]$glmnet <- list(
+    cvfit = res$cvfit,
+    covs.pcox = res$covs.pcox,
+    runtimes = res$runtimes,
+    is_scaled = is_scaled
+  )
+  # -----------------------------------------------------------------------------------
+}
+# -----------------------------------------------------------------------------------
+```
+
+```{r}
+save(folds, file = "./model/model_scenario2_pCox_scaled.RData")
+```
+
+
+# Test
+
+## Set up
+
+should i vary the landmark time???
+
+```{r}
+# landmark time
+T.start <- 0.5
+
+# a set of prediction windows
+deltaT <- 1:10
+```
+
+```{r}
+folds.eval <- vector(mode = "list", length = n_fold)
+
+for (i in 1:n_fold) {
+  # -----------------------------------------------------------------------------------
+  # General - Subset subjects for fold i
+  # -----------------------------------------------------------------------------------
+  tmp <- Get_train_test_data(
+    data.surv, data.long, 
+    folds[[i]]$ids.test,
+    is_scaled, 
+    folds[[i]]$scaling_table
+    )
+  
+  testing.surv <- tmp$testing.surv
+  testing.long <- tmp$testing.long
+  # ----------------------------------------------------------------------------------- 
+  # Filter subjects at risk at landmark time T.start
+  ids.at_risk <- testing.surv %>% 
+    filter(time > T.start) %>%
+    select(id) %>%
+    unlist(use.names = FALSE)
+  
+  surv.new <- testing.surv %>%
+    filter(id %in% ids.at_risk)
+  # in doubt
+#  long.new <- testing.long %>%
+#    filter(id %in% ids.at_risk) %>%
+#    filter(Years.bl <= T.start) # Filter long observations after landmark time
+  long.new <- testing.long %>%
+    filter(id %in% ids.at_risk)
+  
+#  print(paste("[Count] subject at risk at landmark", length(ids.at_risk)))
+
+  # ----------------------------------------------------------------------------------- 
+  surv.new <- testing.surv
+  long.new <- testing.long
+  # -----------------------------------------------------------------------------------
+  # pCox - Prepare newx
+  # -----------------------------------------------------------------------------------
+  # Subset columns to construct model matrix on new data
+  covs.pcox <- folds[[i]]$glmnet$covs.pcox
+  testing.x.covs <- surv.new %>%
+    select(covs.pcox)
+  # Mean imputation
+  testing.x.covs.imputed <- Imputate.x.mean(testing.x.covs)
+  # Model matrix, of dimension n obs x n vars; each row is an observation vector
+  testing.x.mat <- model.matrix(~ ., data = testing.x.covs.imputed)
+  # Observed response
+  testing.y <- survival::Surv(
+    time = surv.new$time,
+    event = surv.new$event,
+    type = "right"
+  )
+  
+  
+  # -----------------------------------------------------------------------------------  
+  # pCox - Evaluate model
+  # ----------------------------------------------------------------------------------- 
+  # -----------------------------------------------------------------------------------
+  # Compute the linear predictor
+  # -----------------------------------------------------------------------------------
+  linpred <- predict(
+    folds[[i]]$glmnet$cvfit, # Fitted "cv.glmnet" object
+    newx = testing.x.mat, # Matrix of new values for x at which predictions are to be made. Must be a matrix
+    s = "lambda.1se",
+    type = "link" # Type "link" (default) returns x^T \beta
+    )
+  
+  
+  # -----------------------------------------------------------------------------------
+  # Compute tdROC and tdAUC
+  # -----------------------------------------------------------------------------------
+  res.tdauc <- Evaluate_tdauc(surv.new, linpred, deltaT)
+  # -----------------------------------------------------------------------------------
+  # Compute c-index
+  # -----------------------------------------------------------------------------------
+  res.c.naive <- survcomp::concordance.index(
+    x = linpred, # vector of risk predictions
+    surv.time = surv.new$time, # vector of event times
+    surv.event = surv.new$event, # vector of event occurence indicators
+    method = "noether" # conservative, noether or name (see paper Pencina et al. for details)
+    )
+  # -----------------------------------------------------------------------------------
+  
+  # -----------------------------------------------------------------------------------
+  # Store results
+  # -----------------------------------------------------------------------------------
+#  folds.eval[[i]]$ids.test_no_missing <- ids.valid
+  folds.eval[[i]]$perf <- list(
+    landmark = T.start,
+    deltaT = deltaT,
+    c.index = res.c.naive$c.index,
+    tdauc = res.tdauc$tdauc,
+    tp = res.tdauc$tp,
+    fp = res.tdauc$fp
+  )
+  # -----------------------------------------------------------------------------------
+}
+```
+
+```{r}
+save(folds.eval, file = "./output/eval_scenario2_pCox_scaled.RData")
+```
+
+# Inpsect results
+
+```{r}
+print("cv.c-index")
+# Estimated C-index
+cv.c.index <- sapply(folds.eval, function(x) x$perf$c.index)
+mean(cv.c.index) %>% round(3)
+sd(cv.c.index) %>% round(3)
+```
+
+```{r}
+# Estimated tdAUC for deltaT
+cv.tdauc <- data.frame(
+  deltaT = folds.eval[[1]]$perf$deltaT,
+  tdauc.fold = sapply(folds.eval, function(x) x$perf$tdauc) # row is fold, column is prediction window
+)
+
+# Plot figure for average tdauc in single CV
+cv.tdauc %>%
+  mutate(mean = rowMeans(across(starts_with("tdauc")))) %>%
+  select(deltaT, mean) %>%
+  round(3) %>%
+  ggplot() + 
+    geom_point(aes(x = deltaT, y = mean)) +
+    geom_line(aes(x = deltaT, y = mean)) +
+    scale_y_continuous(breaks = 0:10 / 10) +
+    coord_cartesian(ylim = c(0, 1)) +
+    xlab("prediction window (T+deltaT)") + ylab("cv tdAUC")
+
+```
+
+
+```{r, fig.width=15, fig.height=6}
+# Plot all tdROC
+for (i in 1:n_fold) {
+  tdroc.list <- lapply(1:length(deltaT), function(j) {
+    tp <- folds.eval[[i]]$perf$tp[[j]]
+    fp <- folds.eval[[i]]$perf$fp[[j]]
+    ggplot(data = data.frame(TP = tp, FP = fp)) +
+      geom_point(aes(x = FP, y = TP), size = 0.2) + 
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+      labs(
+        title = paste("tdROC for prediction time =", deltaT[j]),
+        subtitle = paste("tdAUC =", round(folds.eval[[i]]$perf$tdauc[[j]], 3))
+      )
+  })
+  ggpubr::ggarrange(plotlist = tdroc.list, ncol = 5, nrow = 2) %>%
+    print()
+}
+```
+
+
+
+
+
+
+## CV pCox diagnostics
+
+```{r, eval=FALSE}
+#plot(cvfit)
+
+#cvfit$lambda.min
+
+#cvfit$lambda.1se
+
+```

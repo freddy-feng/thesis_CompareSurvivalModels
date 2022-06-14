@@ -1,0 +1,319 @@
+---
+title: "trial experiment with PRC method"
+author: "Yibin Feng"
+date: '2022-04-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dependencies
+```{r}
+rm(list = ls())
+
+# Dependencies
+library(tidyverse)
+
+#library(pencal)
+#install.packages("./package/pencal_1.2.1.tar.gz", repos = NULL, type="source")
+
+
+
+
+
+
+# Load wrapper function, utility function for running experiment using pencal library
+source("function_pencal_exp.R")
+source("function_utility_exp.R")
+source("function_evaluation.R")
+
+select <- dplyr::select
+```
+
+# Set up
+
+## User define
+
+```{r}
+# Set up hyperparameters --------------------------------------------------------------------------
+# Cross validation parameter
+n_fold <- 10
+seed <- 722 # Vary this for repeated CV
+
+
+set_scenario <- "scenario2"
+
+baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4")
+
+# -----------------------------------------------------------------------------------
+# Load data
+# -----------------------------------------------------------------------------------
+# Contains two dataframes df.surv_preds and df.long_censored
+load("adni_cleaned_prc.RData")
+
+data.surv <- df.surv_preds_prc
+data.long <- df.long_censored_prc
+
+# -----------------------------------------------------------------------------------
+# Initialize
+# -----------------------------------------------------------------------------------
+folds <- Initialize_exp(data.surv, data.long, set_scenario, n_fold, seed)
+
+save(folds, file = "output_folds_template.RData")
+# -----------------------------------------------------------------------------------
+```
+
+```{r}
+is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
+
+# -----------------------------------------------------------------------------------
+# Fit models in CV loop
+# -----------------------------------------------------------------------------------
+for (i in 1:n_fold) {
+  print("---------------------------------------------------------------------------------------------------")
+  print(paste("Start training in fold", i))
+  print("---------------------------------------------------------------------------------------------------")
+  # -----------------------------------------------------------------------------------
+  # General - Subset subjects for fold i
+  # -----------------------------------------------------------------------------------
+  tmp <- Get_train_test_data(
+    data.surv, data.long, 
+    folds[[i]]$ids.test,
+    is_scaled, 
+    folds[[i]]$scaling_table
+    )
+  
+  training.surv <- tmp$training.surv
+  training.long <- tmp$training.long
+  
+  # -----------------------------------------------------------------------------------  
+  # pencal - Fit model
+  # -----------------------------------------------------------------------------------
+  res <- run_prc_steps(
+    long.data = training.long, 
+    surv.data = training.surv, 
+    y.names = folds[[i]]$candidate.long.covs, # where did you specify baseline covariates
+    n.boots = 0,
+    n.cores = 1,
+    verbose = TRUE,
+    penalty = "ridge")# where to save the penalty setting?
+  # -----------------------------------------------------------------------------------
+  
+  # -----------------------------------------------------------------------------------
+  # pencal - Store results
+  # -----------------------------------------------------------------------------------
+  # Consider to keep useful objects only, the dfs are consuming time and space
+  folds[[i]]$pencal <- list(
+    step1 = res$step1,
+    step2 = res$step2,
+    step3 = res$step3,
+    runtimes = res$runtimes,
+    is_scaled = is_scaled
+  )
+  # -----------------------------------------------------------------------------------
+}
+# -----------------------------------------------------------------------------------
+```
+
+
+
+```{r}
+save(folds, file = "./model/model_scenario2_pencal_scaled_seed722.RData")
+```
+
+
+
+
+# [INCOMPLETE] Evaluation
+
+## Set up
+warning did not set any landmark time???
+```{r}
+# landmark time
+T.start <- 0.5
+
+# a set of prediction windows
+deltaT <- 1:10
+```
+
+## Testing
+
+```{r}
+folds.eval <- vector(mode = "list", length = n_fold)
+
+for (i in 1:n_fold) {
+  # -----------------------------------------------------------------------------------
+  # General - Subset subjects for fold i
+  # -----------------------------------------------------------------------------------
+  tmp <- Get_train_test_data(
+    data.surv, data.long, 
+    folds[[i]]$ids.test,
+    is_scaled, 
+    folds[[i]]$scaling_table
+    )
+  
+  testing.surv <- tmp$testing.surv
+  testing.long <- tmp$testing.long
+  # -----------------------------------------------------------------------------------
+  # Filter subjects at risk at landmark time T.start
+  ids.at_risk <- testing.surv %>% 
+    filter(time > T.start) %>%
+    select(id) %>%
+    unlist(use.names = FALSE)
+  
+  surv.new <- testing.surv %>%
+    filter(id %in% ids.at_risk)
+  # in doubt
+#  long.new <- testing.long %>%
+#    filter(id %in% ids.at_risk) %>%
+#    filter(Years.bl <= T.start) # Filter long observations after landmark time
+  long.new <- testing.long %>%
+    filter(id %in% ids.at_risk)
+  
+  print(paste("[Count] subject at risk at landmark", length(ids.at_risk)))
+
+  # -----------------------------------------------------------------------------------  
+  # pencal - Evaluate model
+  # ----------------------------------------------------------------------------------- 
+  # Extract fitted models
+  step1 <- folds[[i]]$pencal$step1
+  step2 <- folds[[i]]$pencal$step2
+  step3 <- folds[[i]]$pencal$step3
+  
+  # Obtain predicted random effect
+  # res object comes from fitted pencal
+  preds <- survpred_prclmm(
+    step1 = step1, 
+    step2 = step2, 
+    step3 = step3,
+    times = deltaT, # Prediction window(s) for surv prob prediction
+    new.longdata = long.new, # Long data in test set
+    new.basecovs = surv.new, # Surv data in test set
+    keep.ranef = TRUE 
+  )
+  # -----------------------------------------------------------------------------------  
+  # Obtain new X for predict on pcox.orig
+  # With baseline covariate, may need to expand into without baseline covariate case later
+  # -----------------------------------------------------------------------------------
+  X0 <- model.matrix(as.formula(step3$call$baseline.covs),
+                     data = surv.new)
+  # Join the baseline covariates and predicted random effect summary
+  X.orig <- as.matrix(cbind(X0, as.matrix(preds$predicted_ranefs))) 
+  
+  # Drop intercept
+  contains.int <- "(Intercept)" %in% colnames(X.orig)
+  if (contains.int) {
+    X.orig <- X.orig[, -1]
+  }
+  # -----------------------------------------------------------------------------------
+  # Compute the linear predictor
+  # -----------------------------------------------------------------------------------
+  linpred <- predict(
+    object = step3$pcox.orig, # Fitted "cv.glmnet" or "cv.relaxed" object
+    newx = X.orig, # Matrix of new values for x at which predictions are to be made. Must be a matrix
+    s = "lambda.min",
+    type = "link" # Type "link" (default) returns x^T \beta
+    )
+  # -----------------------------------------------------------------------------------
+  
+  
+  
+  # -----------------------------------------------------------------------------------
+  # Compute tdROC and tdAUC
+  # -----------------------------------------------------------------------------------
+  res.tdauc <- Evaluate_tdauc(surv.new, linpred, deltaT)
+  # -----------------------------------------------------------------------------------
+  # Compute c-index
+  # -----------------------------------------------------------------------------------
+  res.c.naive <- survcomp::concordance.index(
+    x = linpred, # vector of risk predictions
+    surv.time = surv.new$time, # vector of event times
+    surv.event = surv.new$event, # vector of event occurence indicators
+    method = "noether" # conservative, noether or name (see paper Pencina et al. for details)
+    )
+  # -----------------------------------------------------------------------------------
+  
+  # -----------------------------------------------------------------------------------
+  # Store results
+  # -----------------------------------------------------------------------------------
+#  folds.eval[[i]]$ids.test_no_missing <- ids.valid
+  folds.eval[[i]]$perf <- list(
+    landmark = T.start,
+    deltaT = deltaT,
+    c.index = res.c.naive$c.index,
+    tdauc = res.tdauc$tdauc,
+    tp = res.tdauc$tp,
+    fp = res.tdauc$fp
+  )
+  # -----------------------------------------------------------------------------------
+}
+
+```
+
+
+
+
+
+```{r}
+save(folds.eval, file = "./output/eval_scenario2_pencal_scaled_seed722.RData")
+```
+
+```{r}
+print("cv.c-index")
+# Estimated C-index
+cv.c.index <- sapply(folds.eval, function(x) x$perf$c.index)
+mean(cv.c.index) %>% round(3)
+sd(cv.c.index) %>% round(3)
+```
+
+```{r}
+# Estimated tdAUC for deltaT
+cv.tdauc <- data.frame(
+  deltaT = folds.eval[[1]]$perf$deltaT,
+  tdauc.fold = sapply(folds.eval, function(x) x$perf$tdauc) # row is fold, column is prediction window
+)
+
+# Plot figure for average tdauc in single CV
+cv.tdauc %>%
+  mutate(mean = rowMeans(across(starts_with("tdauc")))) %>%
+  select(deltaT, mean) %>%
+  round(3) %>%
+  ggplot() + 
+    geom_point(aes(x = deltaT, y = mean)) +
+    geom_line(aes(x = deltaT, y = mean)) +
+    scale_y_continuous(breaks = 0:10 / 10) +
+    coord_cartesian(ylim = c(0, 1)) +
+    xlab("prediction window (T+deltaT)") + ylab("cv tdAUC")
+
+```
+
+
+
+
+```{r, fig.width=15, fig.height=6}
+# Plot all tdROC
+for (i in 1:n_fold) {
+  tdroc.list <- lapply(1:length(deltaT), function(j) {
+    tp <- folds.eval[[i]]$perf$tp[[j]]
+    fp <- folds.eval[[i]]$perf$fp[[j]]
+    ggplot(data = data.frame(TP = tp, FP = fp)) +
+      geom_point(aes(x = FP, y = TP), size = 0.2) + 
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+      labs(
+        title = paste("tdROC for prediction time =", deltaT[j]),
+        subtitle = paste("tdAUC =", round(folds.eval[[i]]$perf$tdauc[[j]], 3))
+      )
+  })
+  ggpubr::ggarrange(plotlist = tdroc.list, ncol = 5, nrow = 2) %>%
+    print()
+}
+```
+
+
+
+
+
+
+

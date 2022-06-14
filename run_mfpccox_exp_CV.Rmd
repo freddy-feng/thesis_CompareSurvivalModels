@@ -1,0 +1,369 @@
+---
+title: "Untitled"
+author: "Yibin Feng"
+date: '2022-06-09'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Dependencies
+
+```{r}
+
+library(tidyverse)
+
+#source("functions.R") # Already in previous chunk
+
+
+
+source("function_MFPCCox.R") # From Kan Li github
+source("function_MFPCCox_exp.R")
+source("function_utility_exp.R")
+```
+
+
+# Load data to long and surv
+
+```{r}
+# Contains two dataframes df.surv_preds and df.long_censored
+load("adni_cleaned_prc.RData")
+```
+
+
+```{r}
+load(file = "output_folds_template.RData")
+```
+
+
+
+
+## MFPCCox - Specify model and temp fix
+
+remove "Fusiform", "Ventricles", "WholeBrain" due to error
+Error in .PACE(X = funDataObject@argvals[[1]], funDataObject@X, Y.pred = Y.pred, : 
+Measurement error estimated to be zero and there are fewer observed points than PCs; scores cannot be estimated.
+
+```{r}
+# variables reported in section 3, MFPCCox paper
+basecov.names <- folds[[1]]$baseline.covs
+
+# set longitudinal covariates
+#y.names.literature <- c("ADAS13", "MMSE", "RAVLT.learning", "RAVLT.immediate", "FAQ") # longitudinal covariates in literature
+#y.names # Common to pencal
+
+# Use candidate long covariates as basis, then drop covariates that reported error
+candidate.long.covs <- folds[[1]]$candidate.long.covs
+y.names <- candidate.long.covs[!(candidate.long.covs %in% c("Fusiform", "Ventricles", "WholeBrain", "ICV"))] 
+n.y <- length(y.names) # number of long covariates
+
+# time variable for longitudinal variable y
+#y.t <- "Years.bl" # timestamp column name for long covariates
+#y.t <- "M" # use months from baseline instead of years from baseline, less possible values in obstime
+y.t <- "Y" # generic, use years from baseline, rounded
+```
+
+## Prepare the multivar array
+
+```{r}
+# -----------------------------------------------------------------------------------
+# MFPCCox - compute meta features on full data, train + test
+# -----------------------------------------------------------------------------------  
+# To prevent a potential bug that the test set has a observed time different from the time domain
+# But it also makes it less robust to new data?
+obstime <- sort(unique(df.long_censored_prc[, y.t])) # get unique obs timestamp in long data
+argvals <- obstime / max(obstime) # scale obstime to [0,1] for uPACE
+
+subject.id <- data.surv$id # subject ids in full data
+nPat <- length(subject.id) # number of subjects in full data
+
+# Manual cleaning
+# should generalize this step! or fix the root problem!
+# or automate the checking and removal process
+  df.long_censored_prc.modified <- Remove_invalid_long_data(df.long_censored_prc)
+  print(paste("Number of observations in long data before removal =", nrow(df.long_censored_prc)))
+  print(paste("Number of observations in long data after removal =", nrow(df.long_censored_prc.modified)))
+
+
+# -----------------------------------------------------------------------------------  
+# MFPCCpx - Initalize multivar array
+# -----------------------------------------------------------------------------------
+# This multivar array will be shared between train set and test set by indexing
+multivar <- Convert_long_to_mvarray(
+  long = df.long_censored_prc.modified, # Temp fix
+  y.t = y.t,
+  obstime = obstime, 
+  subject_id = subject.id, 
+  n_subject = nPat, 
+  y.names = y.names, 
+  n.y = n.y)
+```
+
+
+
+# Train
+
+At this stage, folds list for cross validation should be initiated.
+
+
+```{r}
+is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
+
+# -----------------------------------------------------------------------------------
+# Fit models for each fold
+# -----------------------------------------------------------------------------------
+for (i in 1:n_fold) {
+  # -----------------------------------------------------------------------------------
+  # General - Subset subjects for fold i
+  # -----------------------------------------------------------------------------------
+  tmp <- Get_train_test_data(
+    data.surv, data.long, 
+    folds[[i]]$ids.test,
+    is_scaled, 
+    folds[[i]]$scaling_table
+    )
+  
+  training.surv <- tmp$training.surv
+  training.long <- tmp$training.long
+  
+  
+  # -----------------------------------------------------------------------------------
+  # MFPCCox 
+  # -----------------------------------------------------------------------------------
+  res <- Train_MFPCCox(
+      training.surv,
+      multivar, # Converted long data
+      subject.id, # Vector of subject ids corresponding to multivar
+      y.names, # Candidate long covariates
+      argvals # Scaled time domain
+      )
+  
+  # -----------------------------------------------------------------------------------
+  # Store results
+  # -----------------------------------------------------------------------------------
+  folds[[i]]$mfpccox <- list(
+    mfpccox = res$mfpccox,
+    mfpca = res$mfpca,
+    y.names = res$y.names,
+    runtimes = res$runtimes
+  )
+  # -----------------------------------------------------------------------------------
+}
+# -----------------------------------------------------------------------------------
+```
+
+```{r}
+save(folds, file = "./model/model_scenario2_MFPCCox_scaled.RData")
+```
+
+# Test
+
+notes when setting the tstart and deltaT
+error occurs in survivalROC when the prediction window gives "sum( unique.t0 <= predict.time )" == 0
+solution is to increase deltaT... 
+i fail at tstart = 0.5, deltaT = 0.5
+
+```{r}
+# landmark time
+T.start <- 0.5
+
+# a set of prediction windows
+delta.T <- 1:10
+
+```
+
+```{r}
+folds.eval <- vector(mode = "list", length = n_fold)
+
+for (i in 1:n_fold) {
+  # -----------------------------------------------------------------------------------
+  # General - Subset subjects for fold i
+  # -----------------------------------------------------------------------------------
+  tmp <- Get_train_test_data(
+    data.surv, data.long, 
+    folds[[i]]$ids.test,
+    is_scaled, 
+    folds[[i]]$scaling_table
+    )
+  
+  training.surv <- tmp$training.surv
+  training.long <- tmp$training.long
+  # -----------------------------------------------------------------------------------
+  # Filter subjects at risk at landmark time T.start
+  ids.at_risk <- testing.surv %>% 
+    filter(time > T.start) %>%
+    select(id) %>%
+    unlist(use.names = FALSE)
+  
+  surv.new <- testing.surv %>%
+    filter(id %in% ids.at_risk)
+  # in doubt
+#  long.new <- testing.long %>%
+#    filter(id %in% ids.at_risk) %>%
+#    filter(Years.bl <= T.start) # Filter long observations after landmark time
+  long.new <- testing.long %>%
+    filter(id %in% ids.at_risk)
+  
+  print(paste("[Count] subject at risk at landmark", length(ids.at_risk)))
+  
+  
+  # -----------------------------------------------------------------------------------
+  # Subset multivar
+  is_at_risk <- subject.id %in% ids.at_risk # subjects at-risk that are event-free at landmark time, t  
+  tmp.data <- multivar[is_at_risk, , ] # subset longitudinal outcomes for test set
+  tmp.data[, -c(1:which(T.start == obstime)), ] <- NA  # set measurements after landmark time to NA, note that t and obstime have to be equal(!)
+  
+  # Need multivar.train for fold i in UFPCA step
+  is_train <- subject.id %in% training.surv$id # Get row indices for train set
+  multivar.train <- multivar[is_train, , ] # Subset for train set
+  
+  # -----------------------------------------------------------------------------------  
+  # MFPCCox - Evaluate model
+  # ----------------------------------------------------------------------------------- 
+  # -----------------------------------------------------------------------------------  
+  # MFPCCox - uFPCA
+  # ----------------------------------------------------------------------------------- 
+  # univariate FPC 
+  Xi.test <- NULL # Xi: FPC scores
+  
+  for(p in 1:n.y){ # for each longitudinal covariate
+    tmp.ufpca <- uPACE(
+      testData = multivar.train[, , p], # Specific to train set in each fold
+      domain = argvals, 
+      predData = tmp.data[ , , p], 
+      nbasis = 3,
+      pve = 0.95) # run uPACE that wraps PACE and supply data
+    Xi.test <- cbind(Xi.test, tmp.ufpca$scores) # dynamic FPC scores for test subjects 
+  }
+  # -----------------------------------------------------------------------------------  
+  # MFPCCox - MFPCA
+  # ----------------------------------------------------------------------------------- 
+  # estimate MFPC scores for test subjects
+  rho.test <- mfpca.score(Xi.test, folds[[i]]$mfpccox$mfpca$Cms)
+  #tmp.surv.data$rho <- rho.test  
+  # -----------------------------------------------------------------------------------
+  # Compute the linear predictor
+  tmp.rho <- data.frame(rho.test)
+  rho.names <- paste0("rho", 1:ncol(rho.test))
+  names(tmp.rho) <- rho.names
+  tmp.surv.data <- data.frame(surv.new, tmp.rho)
+  
+  X.orig <- tmp.surv.data %>%
+    select(all_of(basecov.names), all_of(rho.names))
+  
+  linpred <- predict(
+    object = folds[[i]]$mfpccox$mfpccox, # Fitted "coxph" object
+    newdata = X.orig, # new values for x at which predictions are to be made
+    type = "lp" # Type "link" (default) returns x^T \beta
+    )
+
+  
+  # -----------------------------------------------------------------------------------
+  # Compute tdROC and tdAUC
+  # -----------------------------------------------------------------------------------
+  res.tdauc <- Evaluate_tdauc(surv.new, linpred, deltaT)
+  # -----------------------------------------------------------------------------------
+  # Compute c-index
+  # -----------------------------------------------------------------------------------
+  res.c.naive <- survcomp::concordance.index(
+    x = linpred, # vector of risk predictions
+    surv.time = surv.new$time, # vector of event times
+    surv.event = surv.new$event, # vector of event occurence indicators
+    method = "noether" # conservative, noether or name (see paper Pencina et al. for details)
+    )
+  # -----------------------------------------------------------------------------------
+  
+  # -----------------------------------------------------------------------------------
+  # Store results
+  # -----------------------------------------------------------------------------------
+#  folds.eval[[i]]$ids.test_no_missing <- ids.valid
+  folds.eval[[i]]$perf <- list(
+    landmark = T.start,
+    deltaT = deltaT,
+    c.index = res.c.naive$c.index,
+    tdauc = res.tdauc$tdauc,
+    tp = res.tdauc$tp,
+    fp = res.tdauc$fp
+  )
+  # -----------------------------------------------------------------------------------
+}
+
+```
+
+```{r}
+save(folds.eval, file = "./output/eval_scenario2_MFPCCox_scaled.RData")
+```
+
+
+
+```{r}
+print("cv.c-index")
+# Estimated C-index
+cv.c.index <- sapply(folds.eval, function(x) x$perf$c.index)
+mean(cv.c.index) %>% round(3)
+sd(cv.c.index) %>% round(3)
+```
+
+```{r}
+# Estimated tdAUC for deltaT
+cv.tdauc <- data.frame(
+  deltaT = folds.eval[[1]]$perf$deltaT,
+  tdauc.fold = sapply(folds.eval, function(x) x$perf$tdauc) # row is fold, column is prediction window
+)
+
+# Plot figure for average tdauc in single CV
+cv.tdauc %>%
+  mutate(mean = rowMeans(across(starts_with("tdauc")))) %>%
+  select(deltaT, mean) %>%
+  round(3) %>%
+  ggplot() + 
+    geom_point(aes(x = deltaT, y = mean)) +
+    geom_line(aes(x = deltaT, y = mean)) +
+    scale_y_continuous(breaks = 0:10 / 10) +
+    coord_cartesian(ylim = c(0, 1)) +
+    xlab("prediction window (T+deltaT)") + ylab("cv tdAUC")
+
+```
+
+
+
+
+```{r, fig.width=15, fig.height=6}
+# Plot all tdROC
+for (i in 1:n_fold) {
+  tdroc.list <- lapply(1:length(deltaT), function(j) {
+    tp <- folds.eval[[i]]$perf$tp[[j]]
+    fp <- folds.eval[[i]]$perf$fp[[j]]
+    ggplot(data = data.frame(TP = tp, FP = fp)) +
+      geom_point(aes(x = FP, y = TP), size = 0.2) + 
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+      labs(
+        title = paste("tdROC for prediction time =", deltaT[j]),
+        subtitle = paste("tdAUC =", round(folds.eval[[i]]$perf$tdauc[[j]], 3))
+      )
+  })
+  ggpubr::ggarrange(plotlist = tdroc.list, ncol = 5, nrow = 2) %>%
+    print()
+}
+```
+
+
+
+
+
+# Diagnostics
+
+```{r, eval=FALSE}
+# check result
+mfpccox %>% 
+  summary()
+```
+
+# Question 
+
+Q: is nbasis a hyperparameter for tuning?
+
+

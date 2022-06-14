@@ -1,0 +1,1819 @@
+---
+title: "MFPC Cox"
+author: "Yibin Feng"
+date: '2022-04-14'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# dependencies 
+```{r}
+rm(list=ls())
+
+library(tidyverse)
+
+#source("functions.R") # Already in previous chunk
+library(MASS)
+library(refund)
+library(survival)
+library(MFPCA)
+
+select <- dplyr::select
+```
+
+# functions of MFPC Cox
+```{r}
+#####################################################
+# functions.R
+# Kan Li
+# update Jun. 29, 2018
+# 
+# support functions for data simulation and MFPCCox model
+# 
+# Functions:
+#
+# sim_mjm_linear    # simulate Multivariate JM linear longitudinal outcomes
+# sim_mjm_nonlinear # simulate Multivariate JM nonlinear longitudinal outcomes
+# uPACE       # univariate FPCA via PACE
+# mfpca.score # MFPC scores
+# mfpca.pred  # MFPC longitudinal prediction
+# cond.prob   # Risk conditional probability
+# functions in tdROC package
+# 
+#####################################################
+
+source("function_MFPCCox.R")
+```
+
+I copied all functions here for understanding each function
+## simulation data for multivariate joint model linear 
+```{r}
+# simulation data for multivariate joint model linear 
+sim_mjm_linear = function(I, J=8,  obstime = c(0,3,6,9,12,15,18,21), miss = FALSE, miss.rate = 0.1){
+  
+  # I : number of subjects
+  # J : number of visits
+  # obstime: observation times
+  # miss: whether introduce missing (missing complete at random) in longitudinal data. Different from drop-out
+  # miss.rate: missing rate.
+  
+  
+  N = I*J
+  
+  # longitudinal submodel  
+  beta0 = c(1.5,2,0.5)
+  beta1 = c(2,-1,1)
+  betat = c(1.5, -1, 0.6) 
+  b.var = c(1,1.5,2)
+  e.var = c(1,1,1)
+  rho = c(-0.2,0.1,-0.3)
+  b.Sigma = diag(b.var)
+  b.Sigma[1,2] = b.Sigma[2,1] = sqrt(b.var[1]*b.var[2])*rho[1]
+  b.Sigma[1,3] = b.Sigma[3,1] = sqrt(b.var[1]*b.var[3])*rho[2]
+  b.Sigma[2,3] = b.Sigma[3,2] = sqrt(b.var[2]*b.var[3])*rho[3]
+  
+  # sample covariate
+  X = rep(rnorm(I, 3, 1), each=J)
+  # sample random effect
+  ranef = mvrnorm(I, c(0,0,0), b.Sigma)
+  id = rep(1:I,each=J)
+  ranef = ranef[id,]
+  # construct longitudinal submodel
+  eta.long = matrix(0, nrow=N, ncol=3)
+  for(i in 1:3)
+    eta.long[,i] = beta0[i] + beta1[i]*X + ranef[,i]
+  
+  
+  # survival submodel
+  gamma1 = -2.5
+  alpha = c(0.1, -0.1, 0.2)
+  W = rbinom(I, size = 1, prob=.5)
+  eta.surv = gamma1*W + c(alpha %*% t(eta.long[!duplicated(id),]))
+  
+  # simulate survival time
+  scale = exp(-7)
+  S = runif(I)
+  Ti = rep(NA, I)
+  alpha.beta = alpha %*% betat
+  f = function(tau){
+    h = function(t) {
+      scale *exp(eta.surv[i] + c(alpha.beta)*t)
+    }
+    S[i] - exp(-stats::integrate(h, 0, tau)$value)
+  }
+  f = Vectorize(f)
+
+  for(i in 1:I){
+    Ti[i] = uniroot(f, c(0, 100))$root
+  }
+  
+  # simulate true survival probability
+  pre.surtime = function(tau){
+    h = function(t) {
+      scale *exp(eta.surv[i] + c(alpha.beta)*t)
+    }
+    
+    exp(-stats::integrate(h, 0, tau)$value)
+  }
+  
+  true.prob = matrix(NA, nrow=I, ncol=length(obstime[-1]))
+  for(i in 1:I){
+    ith = 0
+    for(tau in obstime[-1]){
+      ith = ith + 1
+      true.prob[i, ith] = pre.surtime(tau)
+    }
+  }
+  
+  colnames(true.prob) = as.character(obstime[-1])
+  
+  #--------------------------------
+  # simulate censor time
+  C = runif(I,min=obstime[3], max=obstime[5]+20)
+  time <- pmin(Ti, C) #observed time is min of censored and true
+  event <- ifelse(time==Ti, 1, 0) #0: censored ; 1: event; 
+
+  # prepare data
+  visit = rep(1:J, I)
+  obstime = rep(obstime, I) 
+  erro = mvrnorm(N, c(0,0,0), diag(e.var))
+  Y = matrix(0, nrow=N, ncol=3)
+  for(i in 1:3)
+    Y[,i] = eta.long[,i] + betat[i]*obstime  + erro[,i]
+  
+  
+  long.all = data.frame(id=id, visit=visit, time = rep(time, each=J), event = rep(event, each=J),
+                    Y1=Y[,1], Y2=Y[,2], Y3=Y[,3], obstime=obstime, X=X, ranef=ranef, W  = W[rep(1:I, each=J)], erro=I(erro))
+  
+  long = long.all
+  
+  # introduce missing complete at random
+  if(miss){
+    miss.index = sample(which(long$obstime>obstime[2]), 0.1*N)
+#    miss.index = sample(which(long$obstime > obstime[2]), miss.rate*N) # author forget to use miss.rate 
+    long = long[!c(1:N) %in% miss.index, ] # select ids not in missing indices
+  }
+
+  surv = data.frame(id = c(1:I),time=time, event=event, W = W, true.prob=I(true.prob))
+  
+  # remove observations after event or censoring
+  long = long[long$obstime<long$time, ]
+  
+  return(list(long=long, surv=surv, long.all=long.all))
+}
+```
+
+## simulation data for multivariate joint model nonlinear 
+```{r}
+# simulation data for multivariate joint model nonlinear 
+sim_mjm_nonlinear = function(I, J=8,  obstime = c(0,3,6,9,12,15, 18,21), miss = FALSE, miss.rate = 0.1){
+  
+  # I : number of subjects
+  # J : number of visits
+  # obstime: observation times
+  # miss: whether introduce missing (missing complete at random) in longitudinal data. Different from drop-out
+  # miss.rate: missing rate.
+  
+  
+  N = I*J
+  
+  
+  # longitudinal submodel  
+  beta0 = c(1.5,2,0.5)
+  beta1 = c(2,-1,1)
+  betat = c(1.5, -1, 0.6) 
+  b.var = c(1,1.5,2)
+  e.var = c(1,1,1)
+  rho = c(-0.2,0.1,-0.3)
+  b.Sigma = diag(b.var)
+  b.Sigma[1,2] = b.Sigma[2,1] = sqrt(b.var[1]*b.var[2])*rho[1]
+  b.Sigma[1,3] = b.Sigma[3,1] = sqrt(b.var[1]*b.var[3])*rho[2]
+  b.Sigma[2,3] = b.Sigma[3,2] = sqrt(b.var[2]*b.var[3])*rho[3]
+  
+  # sample covariate
+  X = rep(rnorm(I, 3, 1), each=J)
+  # sample random effect
+  ranef = mvrnorm(I, c(0,0,0), b.Sigma)
+  id = rep(1:I,each=J)
+  ranef = ranef[id,]
+  # construct longitudinal submodel
+  eta.long = matrix(0, nrow=N, ncol=3)
+  for(i in 1:3)
+    eta.long[,i] = beta0[i] + beta1[i]*X + ranef[,i]
+  
+  
+  # survival submodel
+  gamma1 = -2.5
+  alpha = c(0.1, -0.1, 0.2)
+  W = rbinom(I, size = 1, prob=.5)
+  eta.surv = gamma1*W + c(alpha%*%t(eta.long[!duplicated(id),]))
+  
+  # simulate survival time
+  scale = exp(-7)
+  S = runif(I)
+  Ti = rep(NA, I)
+  alpha.beta = alpha%*%betat
+  c = c(1.2, 0.7, 0.5)
+  knots = c(6, 13)
+  f = function(tau){
+    h = function(t) {
+      scale *exp(eta.surv[i] + c[1]*c(alpha.beta)*ifelse(t<knots[1], t, knots[1]) + c[2]*c(alpha.beta)*ifelse(t<knots[2], pmax(0,(t-knots[1])), knots[2]-knots[1]) +
+                   c[3]*c(alpha.beta)* ifelse(t>=knots[2], t-knots[2], 0) )
+    }
+    S[i] - exp(-stats::integrate(h, 0, tau)$value)
+  }
+  f = Vectorize(f)
+  
+  
+  
+  for(i in 1:I){
+    Ti[i] = uniroot(f, c(0, 100))$root
+  }
+  
+  # simulate true survival probability
+  pre.surtime = function(tau){
+    h = function(t) {
+      scale *exp(eta.surv[i] + c[1]*c(alpha.beta)*ifelse(t<knots[1], t, knots[1]) + c[2]*c(alpha.beta)*ifelse(t<knots[2], pmax(0,(t-knots[1])), knots[2]-knots[1]) +
+                   c[3]*c(alpha.beta)* ifelse(t>=knots[2], t-knots[2], 0) ) 
+      
+    }
+    exp(-stats::integrate(h, 0, tau)$value)
+  }
+  
+  true.prob = matrix(NA, nrow=I, ncol=length(obstime[-1]))
+  for(i in 1:I){
+    ith = 0
+    for(tau in obstime[-1]){
+      ith = ith + 1
+      true.prob[i, ith] = pre.surtime(tau)
+    }
+  }
+  
+  colnames(true.prob) = as.character(obstime[-1])
+  
+  
+  #--------------------------------
+  # simulate censor time
+  C = runif(I,min=obstime[4], max=obstime[5]+25)
+  time <- pmin(Ti, C) #observed time is min of censored and true
+  event <- ifelse(time==Ti, 1, 0) #0: censored ; 1: event; 
+  
+  # prepare data
+  visit = rep(1:J, I)
+  obstime = rep(obstime, I) 
+  erro = mvrnorm(N, c(0,0,0), diag(e.var))
+  Y = matrix(0, nrow=N, ncol=3)
+  for(i in 1:3)
+    Y[,i] = eta.long[,i] + betat[i]*(c[1]*ifelse(obstime<knots[1], obstime, knots[1]) + c[2]*ifelse(obstime<knots[2], pmax(0,(obstime-knots[1])), knots[2]-knots[1]) +
+                                       c[3]* ifelse(obstime>=knots[2], obstime-knots[2], 0))  + erro[,i]
+  
+  
+  long.all = data.frame(id=id, visit=visit, time = rep(time, each=J), event = rep(event, each=J),
+                        Y1=Y[,1], Y2=Y[,2], Y3=Y[,3],obstime=obstime, X=X, ranef=ranef, W  = W[rep(1:I, each=J)], erro=I(erro))
+  
+  long = long.all
+  
+  # introduce missing complete at random
+  if(miss){
+    miss.index = sample(which(long$obstime>obstime[2]), 0.1*N)
+    long = long[!c(1:N)%in%miss.index, ]
+  }
+  
+  surv = data.frame(id = c(1:I),time=time, event=event, W = W, true.prob=I(true.prob))
+  # remove observations after event or censoring
+  long = long[long$obstime<long$time, ]
+  
+  return(list(long=long, surv=surv, long.all=long.all))
+}
+```
+
+## uPACE
+```{r}
+# univariate FPCA via principal analysis by conditional estimation(PACE)
+uPACE = function(testData, domain, predData=NULL, nbasis = 10, pve = 0.95, npc = NULL){
+
+  tmp = funData(domain, testData)
+  
+  if (is.null(predData)){
+    tmp2 = NULL
+  } else {
+    tmp2 = funData(domain, predData)
+  }
+  
+  res = PACE(tmp, tmp2, pve=pve, npc= npc, nbasis=nbasis)
+  # This function calculates a univariate functional principal components analysis by smoothed covariance based on code from fpca.sc in package refund.
+  # tmp: An object of class funData or irregFunData containing the functional data observed, for which the functional principal component analysis is calculated. If the data is sampled irregularly (i.e. of class irregFunData), funDataObject is transformed to a funData object first.
+  # tmp2: An object of class funData, for which estimated trajectories based on a truncated Karhunen-Loeve representation should be estimated. Defaults to NULL, which implies prediction for the given data.
+  # pve: proportion of variance explained: used to choose the number of principal components.
+  # nbasis: An integer, representing the number of B-spline basis functions used for estimation of the mean function and bivariate smoothing of the covariance surface.  
+  
+  return(res)
+} 
+```
+
+## mFPCA
+```{r}
+# multivariate FPCA using results from uPACE
+mFPCA = function(Xi, phi, p , L){
+  
+  # eigenanalysis on matrix M (or H mentioned in paper)
+  M = t(Xi)%*%Xi/(I-1)
+  eigen.M = eigen(M)
+  values = eigen.M$values # eigenvalues
+  pve = cumsum(values)/sum(values) # percentage of variance explained
+  Cms = eigen.M$vectors # eigenvectors
+  index = unlist(lapply(1:length(L), function(x) rep(x, L[x])))
+  
+  # MFPCA score
+  rho = mfpca.score(Xi, Cms)
+  
+  # MFPCA eigenfunction
+  psis = NULL
+  for(j in 1:p){
+    psi = NULL
+    for(m in 1:dim(Cms)[2]){
+      psi = cbind(psi, phi[[j]]%*%Cms[which(index==j),m])
+    }
+    psis[[j]] = psi
+  }
+  
+  out = list(eigenvalue = values, Cms = Cms, pve = pve, index=index, rho = rho, psis=psis)
+  
+  return(out)
+}
+```
+
+## mfpc score calculation
+```{r}
+# mfpc score calculation
+mfpca.score = function(predXi, Cms){
+  
+  rho = matrix(NA, nrow = nrow(predXi), ncol=dim(Cms)[2])
+  
+  for(i in 1:nrow(predXi)){
+    for(m in 1:dim(Cms)[2]){
+      rho[i,m] = predXi[i,]%*%Cms[,m]
+    }
+  }
+  
+  return(rho)
+}
+```
+
+## trajectories prediction by MFPC
+```{r}
+# mfpc trajectories prediction
+mfpca.pred = function(score, meanf, psi, n.rho=NULL){
+  p = length(psi)
+  n = nrow(score)
+  
+  if(is.null(n.rho)){
+    n.rho = ncol(score)
+  }
+  
+  pred = array(NA, c(n, length(meanf[[1]]), p))
+  for(m in 1:p){
+    pred[,,m] = matrix(meanf[[m]], nrow=n, ncol =length(meanf[[m]]), byrow = T ) + score[,1:n.rho]%*%t(psi[[m]][, 1:n.rho])
+  }
+  
+  out = pred
+  return(out)
+}
+```
+
+## conditional survival probability
+```{r}
+# conditional survival probability
+cond.prob = function(model, newdata, Tstart, Tpred){
+  risk.Tstart = as.numeric(summary(survfit(model, newdata = newdata, se.fit = F, conf.int = F), times = Tstart)$surv)
+  risk.Tpred = as.numeric(summary(survfit(model, newdata = newdata, se.fit = F, conf.int = F), times = Tpred)$surv)
+  return(risk.Tpred/risk.Tstart)
+}
+```
+
+## Functions for R package tdROC
+```{r}
+################################################################################
+##
+##                       Functions for R package tdROC
+##
+################################################################################
+
+calc.AUC <- function( sens, spec ) {
+  # Given a vector of sensitivity and specificity, calculate the area under the
+  # ROC curve (AUC)
+  # Arguments:
+  #  -- sens: sensitivity
+  #  -- spec: specificity
+  # Return:
+  #  -- AUC as a numerical scalar
+  # NOTE: The AUC is obtained by trapezoidal integration of the area under the
+  #       piecewise linear curve obtained by connecting the sensitivity and
+  #       specificity.
+  o <- order(sens, 1-spec) ;
+  y <- sens[o] ;
+  x <- 1-spec[o] ;
+  x <- c(0, x, 1) ;
+  y <- c(0, y, 1) ;
+  m <- length(x) ;
+  x1 <- x[-m] ;
+  x2 <- x[-1] ;
+  y1 <- y[-m] ;
+  y2 <- y[-1] ;
+  AUC <- sum( (y1 + y2)*(x2 - x1)/2 ) ;
+  AUC ;
+}
+
+
+calc.kw <- function( X, x0, span ) {
+  # Calculate the nearest neighbor kernel weights
+  # Arguments:
+  #  -- span: the proportion of observations used
+  #  -- x0: the x0 around which the kernel weights are calculated
+  #  -- X: the vector of all biomarker values in the data
+  # Return:
+  #  a vector of kernel weights for each element in X
+  # NOTE: X must be the vector of ALL biomarker values in the data; it cannot
+  #       be any other vector of arbitrary length
+  n <- length(X) ;
+  tmp0 <- abs( X-x0 ) ;
+  tmp1 <- sort( tmp0 ) ;
+  tmp2 <- tmp1[ ceiling(n*span) ] ;
+  # the cut off that defines the neighborhood
+  ans <- as.numeric( tmp0 <= tmp2 ) ;
+  ans ;
+}
+
+
+tdROC <- function( X, Y, delta, tau, span, cut.off = NULL,
+                   nboot = 0, alpha = 0.05, n.grid = 1000,
+                   X.min = NULL, X.max = NULL ) {
+  # Calculate the time-dependent sensitivity and specificity and
+  # area under the curve (AUC)
+  # Arguments:
+  #  -- X: the vector of biomarker values
+  #  -- Y: time to event
+  #  -- delta: indicator of event (1) or censoring (0)
+  #  -- tau: the prediction horizon
+  #  -- span: the proportion of observations used in calculating kernel weights
+  #           (i.e., bandwidth in nearest neighbor method)
+  #  -- nboot: number of bootstrap, to be used the variance estimation;
+  #            nboot = 0 corresponds to no variance estimation
+  #  -- alpha: 1-level of confidence interval, default to be 0.05. It is
+  #            used only when nboot > 0
+  #  -- n.grid: number of biomarker cut off values used
+  #             when calculating the ROC curve
+  #  -- cut.off: a vector of biomarker cut.off values at which sensitivity and
+  #              specificity will be calculated
+  #  -- X.min, X.max: the min and max of X; if NULL, they will be calculated
+  #             inside the function; these are not needed for point estimate,
+  #             they are needed for bootstrap
+  # Return:
+  #  -- ROC: a data frame of three columns:
+  #             grid, sensitivity and specificity
+  #  -- AUC: a data frame of one row and four columns
+  #             AUC, standard error of AUC, the lower and upper bootstrap CI
+  #  -- prob: a data frame of three columns:
+  #             cut.off, sensitivity and specificity
+  # NOTE: X, Y and delta must have the same length
+  n <- length(X) ;
+  positive <- rep(NA, n) ;
+  for (i in 1:n) {
+    if ( Y[i] > tau ) {
+      positive[i] <- 0 ;
+    } else {
+      if ( delta[i] == 1 ) {
+        positive[i] <- 1 ;
+      } else {
+        kw <- calc.kw( X, X[i], span ) ;
+        fm <- survfit( Surv(Y, delta) ~ 1, weights = kw ) ;
+        tmp <- summary(fm, times = c(Y[i], tau))$surv ;
+        if ( tmp[1] == 0 ) {
+          positive[i] <- 1 ;
+        } else {
+          positive[i] <- 1 - tmp[2]/tmp[1] ;
+        }
+      }
+    }
+  }
+  negative <- 1 - positive ;
+  if ( is.null(X.min) ) { X.min <- min(X) }
+  if ( is.null(X.max) ) { X.max <- max(X) }
+  grid <- c( -Inf, seq( X.min, X.max, length=n.grid ), Inf ) ;
+  sens <- spec <- NULL ;
+  for (this.c in grid ) {
+    sens <- c( sens, sum(positive*as.numeric(X > this.c))/sum(positive) ) ;
+    # sensitivity that incorporates fractional "positive"
+    spec <- c( spec, sum(negative*as.numeric(X <= this.c))/sum(negative) ) ;
+    # specificity that incorporates fractional "negative"
+  }
+  ROC <- data.frame( grid = grid,
+                     sens = sens,
+                     spec = spec ) ;
+  AUC <- data.frame( value = calc.AUC( sens, spec ),
+                     sd = NA,
+                     lower = NA,
+                     upper = NA ) ;
+  sens <- spec <- NULL ;
+  if ( !is.null(cut.off) ) {
+    for (this.c in cut.off ) {
+      sens <- c( sens, sum(positive*as.numeric(X > this.c))/sum(positive) ) ;
+      # sensitivity that incorporates fractional "positive"
+      spec <- c( spec, sum(negative*as.numeric(X <= this.c))/sum(negative) ) ;
+      # specificity that incorporates fractional "negative"
+    }
+    prob <- data.frame( cut.off = cut.off,
+                        sens = sens,
+                        spec = spec ) ;
+  } else {
+    prob <- NULL ;
+  }
+  
+  if ( nboot > 0 ) {
+    # start bootstrap for AUC
+    boot.AUC <- rep(NA, nboot) ;
+    if ( !is.null(cut.off) ) {
+      boot.sens <- matrix( NA, nrow=nboot, ncol=length(cut.off) ) ;
+      boot.spec <- matrix( NA, nrow=nboot, ncol=length(cut.off) ) ;
+    }
+    set.seed(123) ;
+    # the random number seed is hardcoded
+    for (b in 1:nboot) {
+      loc <- sample( x = 1:n, size = n, replace = T ) ;
+      X2 <- X[loc] ;
+      Y2 <- Y[loc] ;
+      delta2 <- delta[loc] ;
+      out <- tdROC( X2, Y2, delta2, tau, span, nboot = 0, alpha, n.grid,
+                    cut.off = cut.off, X.min = X.min, X.max = X.max ) ;
+      boot.AUC[b] <- out$AUC$value ;
+      if ( !is.null(cut.off) ) {
+        boot.sens[b, ] <- out$prob$sens ;
+        boot.spec[b, ] <- out$prob$spec ;
+      }
+    }
+    tmp1 <- sd(boot.AUC) ;
+    tmp2 <- as.numeric( quantile( boot.AUC, prob = c(alpha/2, 1-alpha/2) ) ) ;
+    AUC$sd <- tmp1 ;
+    AUC$lower <- tmp2[1] ;
+    AUC$upper <- tmp2[2] ;
+    # 
+    if ( !is.null(cut.off) ) {
+      prob$sens.sd <- apply( boot.sens, 2, sd ) ;
+      prob$sens.lower <- apply( boot.sens, 2, quantile, prob = alpha/2 ) ;
+      prob$sens.upper <- apply( boot.sens, 2, quantile, prob = 1-alpha/2 ) ;
+      prob$spec.sd <- apply( boot.spec, 2, sd ) ;
+      prob$spec.lower <- apply( boot.spec, 2, quantile, prob = alpha/2 ) ;
+      prob$spec.upper <- apply( boot.spec, 2, quantile, prob = 1-alpha/2 ) ;
+    } else {
+      prob$sens.sd <- NA ;
+      prob$sens.lower <- NA ;
+      prob$sens.upper <- NA ;
+      prob$spec.sd <- NA ;
+      prob$spec.lower <- NA ;
+      prob$spec.upper <- NA ;
+    }
+  }
+  
+  pct.ctrl <- mean( Y > tau ) ;
+  pct.case <- mean( Y <= tau & delta == 1 ) ;
+  pct.not.sure <- mean( Y <= tau & delta == 0 ) ;
+  return( list( ROC = ROC, AUC = AUC, prob = prob,
+                pct = c( ctrl = pct.ctrl,
+                         case = pct.case,
+                         not.sure = pct.not.sure ),
+                tau = tau, span = span ) ) ;
+}
+
+
+plot.tdROC <- function( fm ) {
+  # Plot the ROC curve estimated by tdROC()
+  # Arguments:
+  #  -- fm: the object returned by tdROC()
+  # Return:
+  #  -- a plot of ROC curve
+  x <- 1 - fm$ROC$spec ;
+  y <- fm$ROC$sens ;
+  tmp <- order(x, y) ;
+  x2 <- x[tmp] ;
+  y2 <- y[tmp] ;
+  windows() ;
+  plot( x = x2, y = y2, xlab="1-specificity", ylab="sensitivity",
+        type="l", lwd = 2, xlim=c(0,1), ylim=c(0,1),
+        main=paste("AUC = ", round(fm$AUC$value, 3), " (",
+                   round(fm$AUC$lower, 3), ", ",
+                   round(fm$AUC$upper, 3), ")", sep="")
+  ) ;
+  abline(0, 1, col="gray", lwd=2, lty=2) ;
+  invisible(0) ;
+}
+
+
+is.monotone <- function(x) {
+  # determine if a vector x is monotone (increasing or decreasing) or not
+  m <- length(x) ;
+  if ( all( x[-m] - x[-1] >= 0 ) | all( x[-m] - x[-1] <= 0 ) ) {
+    ans <- TRUE ;
+  } else {
+    ans <- FALSE ;
+  }
+  ans ;
+}
+```
+
+
+# apply to ADNI using adapted script
+
+## load data to long and surv
+```{r}
+# Contains two dataframes df.surv_preds and df.long_censored
+load("adni_cleaned_prc.RData")
+```
+
+## using a smaller set of subjects reported in literature
+
+```{r}
+# select the subset of data Li et al. reported in section 3, MFPCCox paper
+
+# include MCI subjects at baseline under ADNI1 protocol
+df.surv_preds_mfpccox <- df.surv_preds_prc %>% 
+  filter(COLPROT == "ADNI1", DX.bl == "LMCI")
+
+df.long_censored_mfpccox <- df.long_censored_prc %>% 
+  filter(id %in% df.surv_preds_mfpccox$id)
+
+surv <- df.surv_preds_mfpccox  # survival data
+long <- df.long_censored_mfpccox  # longitudinal data
+
+print(paste("[Count] number of subjects =", nrow(surv)))
+```
+
+## specify model
+
+option 1: covariates identical to MFPCCox paper
+```{r}
+# variables reported in section 3, MFPCCox paper
+basecov.names <- c("PTGENDER", "AGE", "PTEDUCAT", "APOE4") # baseline covariates
+y.names <- c("ADAS13", "MMSE", "RAVLT.learning", "RAVLT.immediate", "FAQ") # longitudinal covariates
+
+# time variable for longitudinal variable y
+#y.t <- "Years.bl" # timestamp column name for long covariates
+#y.t <- "M" # use months from baseline instead of years from baseline, less possible values in obstime
+y.t <- "Y" # generic, use years from baseline, rounded
+```
+
+option 2: increase to 12 longitudinal covariates
+```{r}
+basecov.names <- c("PTGENDER", "AGE", "PTEDUCAT", "APOE4") # baseline covariates
+y.names <- c("ADAS11", "ADAS13", "ADASQ4", "CDRSB", "FAQ", "LDELTOTAL", "MMSE", "mPACCdigit", "mPACCtrailsB", "RAVLT.forgetting", "RAVLT.immediate", "RAVLT.learning") # longitudinal covariates
+
+# time variable for longitudinal variable y
+#y.t <- "Years.bl" # timestamp column name for long covariates
+#y.t <- "M" # use months from baseline instead of years from baseline, less possible values in obstime
+y.t <- "Y" # generic, use years from baseline, rounded
+
+
+
+```
+
+
+is this necessary
+```{r}
+# only include id without missing value in long data
+limit.missing <- 1 # remove subjects with NA rate larger than this limit, [0,1], 0 most stringent, 1 least stringent
+
+list.ids <- lapply(y.names, function(y){
+  long %>% select(id, y) %>% 
+    group_by(id) %>% 
+    dplyr::summarise(na_ratio = mean(is.na(get(y)))) %>%
+    filter(na_ratio <= limit.missing) %>%
+    select(id)
+})
+
+# check intersect of selected ids for each variable
+ids.final <- Reduce(intersect, list.ids) %>% 
+  unlist(use.names = FALSE)
+
+# prepare final subset
+surv <- surv %>% 
+  filter(id %in% ids.final)
+long <- long %>% 
+  filter(id %in% ids.final)
+
+print(paste("[Count] number of subjects =", nrow(surv)))
+```
+
+```{r}
+# Check missing rate in longitudinal variables before fitting model
+long %>% select(all_of(y.names)) %>% summary()
+
+list.plots <- lapply(y.names, function(y){
+  g <- long %>% select(id, y) %>% group_by(id) %>% 
+    dplyr::summarise(na_ratio = mean(is.na(get(y)))) %>%
+    ggplot() + geom_histogram(aes(na_ratio)) + labs(title = y)
+  return(g)
+})
+
+ggpubr::ggarrange(plotlist = list.plots, ncol = 3, nrow = 2)
+```
+
+## obtain meta info about data
+```{r}
+obstime <- sort(unique(long[, y.t])) # get unique obs timestamp in long data
+argvals <- obstime / max(obstime) # scale obstime to [0,1] for uPACE
+
+patID <- surv$id # subject ids
+nPat <- length(patID) # number of subjects
+
+n.y <- length(y.names) # number of long covariates
+```
+
+```{r, eval=FALSE}
+# check
+print(nrow(surv))
+print(nrow(long))
+
+print(obstime)
+print(argvals)
+```
+
+
+
+## display data summary
+```{r, eval=FALSE}
+# visualize long data
+long %>% 
+  mutate(across(all_of(y.names), as.numeric)) %>%
+  pivot_longer(cols = y.names, names_to = "y") %>%
+  ggplot() + 
+    geom_point(aes(get(y.t), value, group = id), alpha = 0.1, na.rm = TRUE) +
+    geom_line(aes(get(y.t), value, group = id), alpha = 0.1, na.rm = TRUE) +
+    facet_wrap(~y, ncol = 2, scales = "free") + 
+  xlab("Year after baseline")
+```
+```{r, eval=FALSE}
+# some subjects only have one reading, does it matter?
+long %>% 
+  group_by(id) %>% 
+  dplyr::summarize(count = n())
+```
+
+
+
+
+## train-test split setting
+this part to be improved, now just a quick hack
+
+no randomize before split
+
+```{r}
+n_fold <- 5
+
+# Train set
+surv.train <- surv %>% 
+  splitstackshape::stratified(., group = "event", size = 1 - 1/n_fold)
+long.train <- long %>% 
+  filter(id %in% surv.train$id)
+
+# Test set (complement to train set)
+surv.test <- surv %>% 
+  filter(!(id %in% surv.train$id))
+long.test <- long %>% 
+  filter(id %in% surv.test$id)
+
+print(dim(surv.train))
+print(dim(surv.test))
+
+print(dim(long.train))
+print(dim(long.test))
+
+
+I <- nrow(surv.train)
+I.test <- nrow(surv.test) # 0 => no test set for trial run
+
+print(I)
+print(I.test)
+
+```
+
+
+## transfer longitudinal outcomes from long to multiarray format
+
+
+```{r}
+# transfer longitudinal outcomes from long to wide
+multivar = array(NA, c((I+I.test), length(obstime), n.y)) # dimension = {I train subjects + I.test test subjects, obs time, long covariates}
+
+for(i in 1:nPat){ # for each subject i
+#  print(i) # debug
+  visits <- which(obstime %in% (long[long$id == patID[i], y.t])) # get obstime as visit index for each subject i, use as index below
+  for(p in 1:n.y){ # for each predictor
+#    print(p) # debug
+    multivar[i, visits, p] <- long[, y.names[p]][long$id == patID[i]] # filter obs in covariate p for subject i
+  }
+}
+
+multivar.train <- multivar[1:I, , ] # subset for training, up to I objects
+```
+
+```{r}
+# check
+i <- 10; p <- 1
+visits <- which(obstime %in% (long[long$id == patID[i], y.t]))
+multivar[i, visits, p] <- long[, y.names[p]][long$id == patID[i]]
+
+long %>% filter(id == patID[10])
+```
+
+
+```{r, eval=FALSE}
+# check array dimension after data reshape
+print("Check dimension of multivar array, train + test")
+print(paste("# of subjects", dim(multivar)[1]))
+print(paste("# of discrete time/visit", dim(multivar)[2]))
+print(paste("# of longitudinal variables", dim(multivar)[3]))
+
+print("Check dimension of multivar array for training")
+print(paste("# of subjects", dim(multivar.train)[1]))
+print(paste("# of discrete time/visit", dim(multivar.train)[2]))
+print(paste("# of longitudinal variables", dim(multivar.train)[3]))
+```
+
+```{r, eval=FALSE}
+## check array values after data reshsape
+i <- sample(I, 1) # check array values after data reshsape
+multivar.train[i,,1] # check array values for first 10 subjects
+
+long %>% select(id, M, Years.bl, y.names[1]) %>% filter(id %in% patID[i]) # crosscheck with dataframe
+```
+
+## univariate FPCA via PACE for each y
+```{r}
+# univariate FPCA via PACE
+Xi.train = L = phi.train = meanFun.train = NULL # initialize
+# Xi: FPC scores; phi: eigenfunctions; meanFun: mean function
+
+for(p in 1:n.y){ # for each long covariate
+  tmp.ufpca = uPACE(multivar.train[, , p], argvals, nbasis=3) # wrapper for PACE
+  # argvals: scaled obstime in [0,1]
+  # nbasis: representing the number of B-spline basis functions used for estimation of the mean function and bivariate smoothing of the covariance surface. Defaults to 10
+  Xi.train = cbind(Xi.train, tmp.ufpca$scores) # FPC scores --> column bind
+  L = c(L, dim(tmp.ufpca$scores)[2]) # vector of Lq
+  # ?"@" Extract or replace the contents of a slot in a object with a formal (S4) class structure.
+  phi.train[[p]] = t(tmp.ufpca$functions@X) # eigenfunctions
+  meanFun.train[[p]] = tmp.ufpca$mu@X # mean functions
+}
+```
+
+WARNING may need to debug for p = 1
+
+bug 1:
+when y.names = 1,  multivar.train[, , p] will fail because p =1 will drop third dimension
+temp avoid the trouble by setting 2 Ys
+
+
+## call multivariate FPCA on uFPCA results
+```{r}
+# multivariate FPCA
+mFPCA.train <- mFPCA(
+  Xi = Xi.train, 
+  phi = phi.train, 
+  p = n.y, 
+  L = L)
+
+rho.train <- mFPCA.train$rho # MFPC scores
+pve <- mFPCA.train$pve # percentage of variance explained
+psi <- mFPCA.train$psi # multivariate eigenfunctions
+Cms <- mFPCA.train$Cms # eigenvectors
+```
+
+
+## fit Cox model
+
+
+```{r}
+# survival model
+tmp.rho <- data.frame(rho.train)
+rho.names <- paste0("rho", 1:ncol(rho.train))
+names(tmp.rho) <- rho.names
+surv.train <- data.frame(surv.train, tmp.rho)
+
+#surv.train$rho <- I(rho.train) # MFPC scores as Cox predictors # IS THIS ASIS critical?
+# I(): Change the class of an object to indicate that it should be treated ‘as is’.
+
+lhs <- "Surv(time, event)"
+#rhs <- paste(c(basecov.names, "rho"), collapse = "+")
+rhs <- paste(c(basecov.names, rho.names), collapse = "+")
+formula <- as.formula(paste(lhs, "~", rhs))
+
+CoxFit <- coxph(
+  formula, 
+  data = surv.train, 
+  model = TRUE) # TO BE GENERALIZED, replace W with any number of baseline covariate
+```
+
+
+```{r, eval=FALSE}
+# check result
+CoxFit %>% 
+  summary()
+```
+
+
+## dynamic prediction
+
+```{r}
+# define prediction problem
+# select landmark time s at 0.5, 1, 1.5, and 2 years
+Tstart <- c(0.5, 1, 1.5, 2) # Landmark time
+#Tstart <- c(0.5) # select one for debug
+# ADNI participants reassessed approximately half a year
+#deltaT <- c(0.5, 1) # Prediction window
+deltaT <- c(0.5) # select one for debug
+
+# Check (t + delta t) < tau i.e. max obstime in training data
+Tprime.max <- max(Tstart) + max(deltaT)
+print(paste("Farthest prediction:", Tprime.max, "year"))
+print(paste("Farthest training time point:", max(obstime), "year"))
+```
+
+
+```{r}
+# dynamic prediction, DP
+
+#DP.id = DP.prob = DP.long = timeEvent= trueProb = NULL
+
+# Initialize
+DP.id <- lapply(
+  my.list <- vector(mode = 'list', length(Tstart)), 
+  function(x) {x <- vector(mode='list', length(deltaT))})
+DP.prob <- lapply(
+  my.list <- vector(mode = 'list', length(Tstart)), 
+  function(x) {x <- vector(mode='list', length(deltaT))})
+DP.long <- lapply(
+  my.list <- vector(mode = 'list', length(Tstart)), 
+  function(x) {x <- vector(mode='list', length(deltaT))})
+
+Tstart.idx <- 0
+deltaT.idx <- 0
+
+# For every landmark time
+for (t in Tstart) {
+  
+  Tstart.idx <- Tstart.idx + 1
+  
+  tmp.id <- which(surv.test$time > t) # subjects at-risk that are event-free at landmark time, t
+  # NB: this tmp.id ranges from 1:n, is different from the `id` column in data
+  tmp.surv.data <- surv.test[tmp.id, ] # subset data
+  
+  tmp.data <- multivar[tmp.id, , ] # subset longitudinal outcomes
+  tmp.data[, -c(1:which(t == obstime)), ] <- NA  # set measurements after landmark time to NA, note that t and obstime have to be equal(!)
+  # NB: [subject, visit, covariate]
+  
+  # univariate FPC 
+  Xi.test = NULL # Xi: FPC scores
+  for(p in 1:n.y){ # for each longitudinal covariate
+    tmp.ufpca <- uPACE(multivar.train[,,p], argvals, tmp.data[,,p], nbasis=3) # run uPACE that wraps PACE and supply data
+    # NB: argument for uPACE(testData, domain, predData=NULL, nbasis = 10, pve = 0.95, npc = NULL)
+    Xi.test <- cbind(Xi.test, tmp.ufpca$scores) # dynamic FPC scores for test subjects 
+  }
+  
+  # estimate MFPC scores for test subjects
+  rho.test <- mfpca.score(Xi.test, Cms)
+#tmp.surv.data$rho <- rho.test  
+  
+  tmp.rho <- data.frame(rho.test)
+  rho.names <- paste0("rho", 1:ncol(rho.test))
+  names(tmp.rho) <- rho.names
+  tmp.surv.data <- data.frame(tmp.surv.data, tmp.rho)
+  
+
+  # predict longitudinal trajectories 
+  long.pred <- mfpca.pred(rho.test, meanFun.train, psi)
+  
+  # prediction for different prediction window in deltaT
+  for(dt in deltaT){
+    
+    deltaT.idx <- deltaT.idx + 1 # for indexing different prediction window
+    
+    DP.id[[Tstart.idx]][[deltaT.idx]] <- surv.test$id[tmp.id] # store subject id for prediction
+    DP.long[[Tstart.idx]][[deltaT.idx]] <- long.pred # predicted trajectories at t+dt
+#    timeEvent[[Tstart.idx]][[deltaT.idx]] <- tmp.surv.data[, c("time", "event")] # true event time and even indicator
+#    trueProb[[Tstart.idx]][[deltaT.idx]] <- tmp.surv.data$true.prob[, (which((t+dt) == obstime) - 1)] # true risk 
+    # need to calculate true risk separately
+    DP.prob[[Tstart.idx]][[deltaT.idx]] <- cond.prob(CoxFit, tmp.surv.data, t, (t+dt)) # predicted surv prob
+    # cond.prob(model, newdata, Tstart, Tpred)
+  }
+  
+  deltaT.idx <- 0 # reset counter
+}
+
+```
+
+```{r, eval=FALSE}
+min(DP.prob[[1]][[1]])
+which(DP.prob[[1]][[1]] == min(DP.prob[[1]][[1]]))
+patID[which(DP.prob[[1]][[1]] == min(DP.prob[[1]][[1]]))] # min cond prob id
+```
+
+```{r, eval=FALSE}
+surv %>% filter(id == 572)
+long %>% filter(id == 572)
+```
+
+## compare predicted trajectory
+
+```{r, eval=FALSE}
+#id.dympred <- sample(long$id, 1)
+id.dympred <- 1351 # manual
+
+# View all actual values for subject of interest
+long %>% filter(id == id.dympred) %>% # 1351
+  mutate(across(all_of(y.names), as.numeric)) %>%
+  pivot_longer(cols = y.names, names_to = "y") %>%
+  ggplot() +
+    geom_point(aes(get(y.t), value, group = id), alpha = 1, na.rm = TRUE) +
+#    geom_line(aes(get(y.t), value, group = id), alpha = 0.1, na.rm = TRUE) +
+    facet_wrap(~y, ncol = 2)
+```
+
+
+
+
+```{r, fig.width=12}
+# plot all Tstart to demonstrate dynamic prediction
+
+# select prediction window first
+deltaT.idx <- 1 # set index of prediction window in deltaT
+
+# randomly choose a subject
+id.dympred <- sample(DP.id[[length(Tstart)]][[deltaT.idx]], 1) # select which subject to visualize
+# to make sure this id appears in all DP sets for different Tstart => select id from last set
+
+#id.dympred <- 1351 # manual
+
+list.plots <- vector(mode = "list", length = length(y.names))
+
+for (y.idx in 1:length(y.names)){ # For each longitudinal covariate
+  
+  list.plots[[y.idx]] <- lapply(1:length(Tstart), function(Tstart.idx){ # For each Tstart
+
+    tmp.subject <- which(DP.id[[Tstart.idx]][[deltaT.idx]] == id.dympred) # from subject at-risk, NB: it is different, subset from full set based on landmark
+    tmp.traj <- data.frame(t = obstime, 
+                           y = DP.long[[Tstart.idx]][[deltaT.idx]][tmp.subject, , y.idx])
+    
+    tmp.actual <- long %>% filter(id == id.dympred) %>% select(y.t, y.names[y.idx])
+    
+    g <- ggplot(data = NULL) + 
+      # plot actual values
+      geom_point(
+        data = tmp.actual,
+        aes(get(y.t), get(y.names[y.idx])),
+        alpha = 1, 
+        na.rm = TRUE) + 
+      # add predicted trajectory
+      geom_point(
+        data = tmp.traj,
+        aes(t, y),
+        alpha = 1, color = "red", shape = 4) +
+      geom_smooth(
+        data = tmp.traj,
+        aes(t, y),
+        se = FALSE,
+        alpha = 1, lty = "dashed", color = "red", size = 0.5) + 
+      # add landmark
+      geom_vline(
+        xintercept = Tstart[Tstart.idx], # landmark time
+        alpha = 0.5) +
+      ylab(y.names[y.idx]) + xlab("Time after baseline (yr)") +
+      labs(
+        title = paste("Predicted trajectory (dashed line) and observed values (dot) of", y.names[y.idx]),
+        subtitle = paste(
+          "subject ID = ", id.dympred, 
+          ", event = ", surv$event[surv$id == id.dympred],
+          ", event time = ", round(surv$time[surv$id == id.dympred], 1)
+          ),
+        caption = paste(
+          "Baseline covariates | age =", surv$AGE[surv$id == id.dympred],
+          ", gender =", surv$PTGENDER[surv$id == id.dympred],
+          ", edu =", surv$PTEDUCAT[surv$id == id.dympred],
+          ", APOE4 =", surv$APOE4[surv$id == id.dympred]
+        )
+      )
+    return(g)})
+  
+  print(ggpubr::ggarrange(plotlist = list.plots[[y.idx]]))
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Scale up => apply to ADNI using adapted script
+extend subjects into all adni phases
+
+## load data to long and surv
+```{r}
+# Contains two dataframes df.surv_preds and df.long_censored
+load("adni_cleaned_prc.RData")
+```
+
+```{r}
+# no subset
+df.surv_preds_mfpccox <- df.surv_preds_prc
+df.long_censored_mfpccox <- df.long_censored_prc %>% 
+  filter(id %in% df.surv_preds_mfpccox$id)
+
+surv <- df.surv_preds_mfpccox  # survival data
+long <- df.long_censored_mfpccox  # longitudinal data
+
+print(paste("[Count] number of subjects =", nrow(surv)))
+```
+## manual cleaning
+need to drop rows with double entry for same time label
+see detailed explanation in IDA_adnimerge
+tl;dr - 
+Probe RID 6014, we find that:
+- `M` == 0 appears twice and `EXAMDATE` are close
+- `Month` == 3 is way off and incorrect to describe EXAMDATE
+- good news is that we can drop the one filled with NAs
+- but no idea why it exists at first place?
+```{r}
+long <- long %>%
+  filter(!(id == 6014 & VISCODE == "m0"))
+```
+
+
+
+## specify model
+
+ remove "Fusiform", "Ventricles", "WholeBrain" due to error
+ Error in .PACE(X = funDataObject@argvals[[1]], funDataObject@X, Y.pred = Y.pred, : 
+Measurement error estimated to be zero and there are fewer observed points than PCs; scores cannot be estimated.
+
+```{r}
+# variables reported in section 3, MFPCCox paper
+basecov.names <- c("PTGENDER", "AGE", "PTEDUCAT", "APOE4") # baseline covariates
+
+
+# set longitudinal covariates
+#y.names <- c("ADAS13", "MMSE", "RAVLT.learning", "RAVLT.immediate", "FAQ") # longitudinal covariates
+
+# expanded set of covariates similar to pencal
+#y.names <- c("ADAS11", "ADAS13", "ADASQ4", "CDRSB", "Entorhinal", "FAQ",
+#             "Fusiform", "Hippocampus", "ICV", "LDELTOTAL", "MidTemp", 
+#             "MMSE", "mPACCdigit", "mPACCtrailsB", "RAVLT.forgetting",
+#             "RAVLT.immediate", "RAVLT.learning", "RAVLT.perc.forgetting",
+#             "TRABSCOR", "Ventricles", "WholeBrain")
+
+y.names <- c("ADAS11", "ADAS13", "ADASQ4", "CDRSB", "Entorhinal", "FAQ",
+             "Hippocampus", "ICV", "LDELTOTAL", "MidTemp", 
+             "MMSE", "mPACCdigit", "mPACCtrailsB", "RAVLT.forgetting",
+             "RAVLT.immediate", "RAVLT.learning", "RAVLT.perc.forgetting",
+             "TRABSCOR")
+
+
+# time variable for longitudinal variable y
+#y.t <- "Years.bl" # timestamp column name for long covariates
+#y.t <- "M" # use months from baseline instead of years from baseline, less possible values in obstime
+y.t <- "Y" # generic, use years from baseline, rounded
+```
+
+```{r}
+
+limit.missing <- 1 # remove subjects with NA rate larger than this limit, [0,1], 0 most stringent, 1 least stringent
+# only include id without missing value in long data, is the most conservative
+
+
+list.ids <- lapply(y.names, function(y){
+  long %>% 
+    select(id, y) %>% 
+    group_by(id) %>% 
+    dplyr::summarise(na_ratio = mean(is.na(get(y)))) %>%
+    filter(na_ratio <= limit.missing) %>% 
+    select(id)
+})
+
+# check intersect of selected ids for each variable
+ids.final <- Reduce(intersect, list.ids) %>% 
+  unlist(use.names = FALSE)
+
+# prepare final subset
+surv <- surv %>% 
+  filter(id %in% ids.final)
+long <- long %>% 
+  filter(id %in% ids.final)
+
+print(paste("[Count] number of subjects =", nrow(surv)))
+```
+
+```{r, eval=FALSE}
+# Check missing rate in longitudinal variables before fitting model
+long %>% select(all_of(y.names)) %>% summary()
+
+list.plots <- lapply(y.names, function(y){
+  g <- long %>% select(id, y) %>% group_by(id) %>% 
+    dplyr::summarise(na_ratio = mean(is.na(get(y)))) %>%
+    ggplot() + geom_histogram(aes(na_ratio)) + labs(title = y)
+  return(g)
+})
+
+ggpubr::ggarrange(plotlist = list.plots, ncol = 3, nrow = 2)
+```
+
+## obtain meta info about data
+```{r}
+obstime <- sort(unique(long[, y.t])) # get unique obs timestamp in long data
+argvals <- obstime / max(obstime) # scale obstime to [0,1] for uPACE
+
+patID <- surv$id # subject ids
+nPat <- length(patID) # number of subjects
+
+n.y <- length(y.names) # number of long covariates
+```
+
+
+
+
+## display data summary
+```{r, eval=FALSE}
+# visualize long data
+long %>% 
+  mutate(across(all_of(y.names), as.numeric)) %>%
+  pivot_longer(cols = y.names, names_to = "y") %>%
+  ggplot() + 
+    geom_point(aes(get(y.t), value, group = id), alpha = 0.1, na.rm = TRUE) +
+    geom_line(aes(get(y.t), value, group = id), alpha = 0.1, na.rm = TRUE) +
+    facet_wrap(~y, ncol = 2, scales = "free") + 
+  xlab("Year after baseline")
+```
+
+## train-test split setting
+this part to be improved, now just a quick hack
+
+no randomize before split!!!!!!
+I am only using the first n subjects as training???
+
+```{r}
+n_fold <- 5
+
+# Train set
+surv.train <- surv %>% 
+  splitstackshape::stratified(., group = "event", size = 1 - 1/n_fold)
+long.train <- long %>% 
+  filter(id %in% surv.train$id)
+
+# Test set (which is the complement to train set)
+surv.test <- surv %>% 
+  filter(!(id %in% surv.train$id))
+long.test <- long %>% 
+  filter(id %in% surv.test$id)
+
+print(dim(surv.train))
+print(dim(surv.test))
+
+print(dim(long.train))
+print(dim(long.test))
+
+# Count number of subjects in training set and testing set
+I <- nrow(surv.train)
+I.test <- nrow(surv.test) # 0 => no test set for trial run
+
+print(I)
+print(I.test)
+
+```
+
+
+## transfer longitudinal outcomes from long to multiarray format
+
+
+```{r}
+# transfer longitudinal outcomes from long to wide
+multivar <- array(NA, c((I+I.test), length(obstime), n.y)) # dimension = {I train subjects + I.test test subjects, obs time, long covariates}
+
+for(i in 1:nPat){ # for each subject i
+  #print(i) # Uncomment to debug
+  visits <- which(obstime %in% (long[long$id == patID[i], y.t])) # get obstime as visit index for each subject i, use as index below
+  for(p in 1:n.y){ # for each predictor
+    multivar[i, visits, p] <- long[, y.names[p]][long$id == patID[i]] # filter obs in covariate p for subject i
+  }
+}
+
+multivar.train <- multivar[1:I, , ] # subset for training, up to I objects
+
+dim(multivar.train)
+```
+
+
+
+
+these two problems are either, or
+
+problem(1)
+ISSUE: id 6014, RID 6014 has two rows for M == 0, hence Y == 0. Should use Month to distinguish?
+
+
+problem (2)
+ISSUE: at RID 61, there are two same timestamp for Month, hence affected Y 
+which(obstime %in% (long[long$id == patID[9], y.t])) # vector of 15
+
+long[, y.names[1]][long$id == patID[9]] # vector of 16
+
+long[long$id == patID[9], y.t]
+
+long %>% filter(id == patID[9])
+
+problem (3)
+RID == 1195, repeated values in Years.bl
+
+long %>% filter(id == patID[706]) %>% select(Years.bl, everything())
+
+
+
+```{r, eval=FALSE}
+# check array dimension after data reshape
+print("Check dimension of multivar array, train + test")
+print(paste("# of subjects", dim(multivar)[1]))
+print(paste("# of discrete time/visit", dim(multivar)[2]))
+print(paste("# of longitudinal variables", dim(multivar)[3]))
+
+print("Check dimension of multivar array for training")
+print(paste("# of subjects", dim(multivar.train)[1]))
+print(paste("# of discrete time/visit", dim(multivar.train)[2]))
+print(paste("# of longitudinal variables", dim(multivar.train)[3]))
+```
+
+```{r, eval=FALSE}
+# check array values after data reshsape
+i <- sample(nPat, 1) # random subject
+multivar.train[i,,1] # check array values for first 10 subjects
+long %>% select(id, M, Years.bl, y.names[1]) %>% filter(id %in% patID[i]) # crosscheck with dataframe
+```
+
+
+## univariate FPCA via PACE for each y
+
+Q: is nbasis a hyperparameter for tuning?
+
+```{r}
+# univariate FPCA via PACE
+Xi.train = L = phi.train = meanFun.train = NULL # initialize
+# Xi: FPC scores; phi: eigenfunctions; meanFun: mean function
+
+for(p in 1:n.y) { # for each long covariate
+  print(paste("uFPCA for covariate =", y.names[p])) # Uncomment to debug
+  tmp.ufpca = uPACE(multivar.train[, , p], argvals, nbasis = 3) # wrapper for PACE
+  # argvals: scaled obstime in [0,1]
+  # nbasis: representing the number of B-spline basis functions used for estimation of the mean function and bivariate smoothing of the covariance surface. Defaults to 10
+  Xi.train = cbind(Xi.train, tmp.ufpca$scores) # FPC scores --> column bind
+  L = c(L, dim(tmp.ufpca$scores)[2]) # vector of Lq
+  # ?"@" Extract or replace the contents of a slot in a object with a formal (S4) class structure.
+  phi.train[[p]] = t(tmp.ufpca$functions@X) # eigenfunctions
+  meanFun.train[[p]] = tmp.ufpca$mu@X # mean functions
+}
+```
+
+
+WARNING may need to debug for p = 1
+
+bug 1:
+when y.names = 1,  multivar.train[, , p] will fail because p =1 will drop third dimension
+temp avoid the trouble by setting 2 Ys
+
+
+## call multivariate FPCA on uFPCA results
+```{r}
+# multivariate FPCA
+mFPCA.train <- mFPCA(
+  Xi = Xi.train, 
+  phi = phi.train, 
+  p = n.y, 
+  L = L)
+
+rho.train <- mFPCA.train$rho # MFPC scores
+pve <- mFPCA.train$pve # percentage of variance explained
+psi <- mFPCA.train$psi # multivariate eigenfunctions
+Cms <- mFPCA.train$Cms # eigenvectors
+```
+
+
+
+
+## fit Cox model
+
+```{r}
+# survival model
+tmp.rho <- data.frame(rho.train)
+rho.names <- paste0("rho", 1:ncol(rho.train))
+names(tmp.rho) <- rho.names
+surv.train <- data.frame(surv.train, tmp.rho)
+
+#surv.train$rho <- I(rho.train) # MFPC scores as Cox predictors # Can this ASIS be replaced by above block?
+# I(): Change the class of an object to indicate that it should be treated ‘as is’.
+
+lhs <- "Surv(time, event)"
+#rhs <- paste(c(basecov.names, "rho"), collapse = "+")
+rhs <- paste(c(basecov.names, rho.names), collapse = "+")
+formula <- as.formula(paste(lhs, "~", rhs))
+
+# Fit Proportional Hazards Regression Model
+CoxFit <- coxph(
+  formula, 
+  data = surv.train, 
+  model = TRUE) # TO BE GENERALIZED, replace W with any number of baseline covariate
+```
+
+
+```{r}
+# check result
+CoxFit %>% 
+  summary()
+```
+
+## dynamic prediction
+
+
+why 0.5 step for landmark? ADNI participants reassessed approximately half a year
+
+```{r}
+# define prediction problem
+# select landmark time s at 0.5, 1, 1.5, and 2 years
+#Tstart <- c(0.5, 1, 1.5, 2) # Landmark time
+Tstart <- c(0.5) # Uncomment for debug
+
+#deltaT <- c(0.5, 1) # Prediction window
+deltaT <- c(0.5) # select one for debug
+
+# Check (t + delta t) < tau i.e. max obstime in training data
+Tprime.max <- max(Tstart) + max(deltaT)
+print(paste("Farthest prediction:", Tprime.max, "year"))
+print(paste("Farthest training time point:", max(obstime), "year"))
+```
+
+
+
+```{r}
+# dynamic prediction, DP
+
+#DP.id = DP.prob = DP.long = timeEvent= trueProb = NULL
+
+# Initialize
+DP.id <- lapply(
+  my.list <- vector(mode = 'list', length(Tstart)), 
+  function(x) {x <- vector(mode='list', length(deltaT))})
+DP.prob <- lapply(
+  my.list <- vector(mode = 'list', length(Tstart)), 
+  function(x) {x <- vector(mode='list', length(deltaT))})
+DP.long <- lapply(
+  my.list <- vector(mode = 'list', length(Tstart)), 
+  function(x) {x <- vector(mode='list', length(deltaT))})
+
+Tstart.idx <- 0
+deltaT.idx <- 0
+
+# For every landmark time
+for (t in Tstart) {
+  
+  Tstart.idx <- Tstart.idx + 1
+  
+  # create temp data corresponding to landmark time t
+  tmp.id <- which(surv.test$time > t) # subjects at-risk that are event-free at landmark time, t
+  # NB: this tmp.id ranges from 1:n, is different from the `id` column in data
+  tmp.surv.data <- surv.test[tmp.id, ] # subset data
+  
+  tmp.data <- multivar[tmp.id, , ] # subset longitudinal outcomes
+  tmp.data[, -c(1:which(t == obstime)), ] <- NA  # set measurements after landmark time to NA, note that t and obstime have to be equal(!)
+  # NB: [subject, visit, covariate]
+  
+  # univariate FPC 
+  Xi.test <- NULL # Xi: FPC scores
+  for(p in 1:n.y){ # for each longitudinal covariate
+    tmp.ufpca <- uPACE(multivar.train[, , p], argvals, tmp.data[ , ,p], nbasis = 3) # run uPACE that wraps PACE and supply data
+    # NB: argument for uPACE(testData, domain, predData=NULL, nbasis = 10, pve = 0.95, npc = NULL)
+    Xi.test <- cbind(Xi.test, tmp.ufpca$scores) # dynamic FPC scores for test subjects 
+  }
+  
+  # estimate MFPC scores for test subjects
+  rho.test <- mfpca.score(Xi.test, Cms)
+#tmp.surv.data$rho <- rho.test  
+  
+  tmp.rho <- data.frame(rho.test)
+  rho.names <- paste0("rho", 1:ncol(rho.test))
+  names(tmp.rho) <- rho.names
+  tmp.surv.data <- data.frame(tmp.surv.data, tmp.rho)
+  
+
+  # predict longitudinal trajectories 
+  long.pred <- mfpca.pred(rho.test, meanFun.train, psi)
+  
+  # prediction for different prediction window in deltaT
+  for(dt in deltaT){
+    
+    deltaT.idx <- deltaT.idx + 1 # for indexing different prediction window
+    
+    DP.id[[Tstart.idx]][[deltaT.idx]] <- surv.test$id[tmp.id] # store subject id for prediction
+    DP.long[[Tstart.idx]][[deltaT.idx]] <- long.pred # predicted trajectories at t+dt
+#    timeEvent[[Tstart.idx]][[deltaT.idx]] <- tmp.surv.data[, c("time", "event")] # true event time and even indicator
+#    trueProb[[Tstart.idx]][[deltaT.idx]] <- tmp.surv.data$true.prob[, (which((t+dt) == obstime) - 1)] # true risk 
+    # need to calculate true risk separately
+    DP.prob[[Tstart.idx]][[deltaT.idx]] <- cond.prob(CoxFit, tmp.surv.data, t, (t+dt)) # predicted surv prob
+    # cond.prob(model, newdata, Tstart, Tpred)
+    
+    
+    
+    # performance measure
+    
+  }
+  
+  deltaT.idx <- 0 # reset counter
+}
+
+```
+
+```{r, eval=FALSE}
+min(DP.prob[[1]][[1]])
+which(DP.prob[[1]][[1]] == min(DP.prob[[1]][[1]]))
+patID[which(DP.prob[[1]][[1]] == min(DP.prob[[1]][[1]]))] # min cond prob id
+```
+
+## evaluation
+
+notes when setting the tstart and deltaT
+error occurs in survivalROC when the prediction window gives "sum( unique.t0 <= predict.time )" == 0
+solution is to increase deltaT... 
+i fail at tstart = 0.5, deltaT = 0.5
+
+```{r}
+# landmark time
+T.start <- 0.5
+
+# a set of prediction windows
+delta.T <- 1:10
+
+```
+
+
+```{r, fig.width=4}
+res.tdroc <- vector(mode = "list", length = length(delta.T))
+res.tdauc <- vector(mode = "numeric", length = length(delta.T))
+
+
+# create temp data corresponding to landmark time t
+tmp.id <- which(surv.test$time > T.start) # subjects at-risk that are event-free at landmark time, t
+# NB: this tmp.id ranges from 1:n, is different from the `id` column in data
+tmp.surv.data <- surv.test[tmp.id, ] # subset data
+
+tmp.data <- multivar[tmp.id, , ] # subset longitudinal outcomes
+tmp.data[, -c(1:which(T.start == obstime)), ] <- NA  # set measurements after landmark time to NA, note that t and obstime have to be equal(!)
+# NB: [subject, visit, covariate]
+# what is t??
+
+# univariate FPC 
+Xi.test <- NULL # Xi: FPC scores
+for(p in 1:n.y){ # for each longitudinal covariate
+  tmp.ufpca <- uPACE(multivar.train[, , p], argvals, tmp.data[ , ,p], nbasis = 3) # run uPACE that wraps PACE and supply data
+  # NB: argument for uPACE(testData, domain, predData=NULL, nbasis = 10, pve = 0.95, npc = NULL)
+  Xi.test <- cbind(Xi.test, tmp.ufpca$scores) # dynamic FPC scores for test subjects 
+}
+
+# estimate MFPC scores for test subjects
+rho.test <- mfpca.score(Xi.test, Cms)
+#tmp.surv.data$rho <- rho.test  
+
+tmp.rho <- data.frame(rho.test)
+rho.names <- paste0("rho", 1:ncol(rho.test))
+names(tmp.rho) <- rho.names
+tmp.surv.data <- data.frame(tmp.surv.data, tmp.rho)
+
+X.orig <- tmp.surv.data %>%
+  select(basecov.names, rho.names)
+
+linpred.orig <- predict(
+  CoxFit, # Fitted "coxph" object
+  newdata = X.orig, # Matrix of new values for x at which predictions are to be made. Must be a matrix
+  type = "lp" # Type "link" (default) returns x^T \beta
+  )
+
+for (i in 1:length(delta.T)) {
+
+  predict.time <- delta.T[i]
+  
+  temp <- survivalROC::survivalROC(
+    Stime = tmp.surv.data$time, # Event time or censoring time for subjects
+    status = tmp.surv.data$event, # Indicator of status, 1 if death or event, 0 otherwise
+    marker = linpred.orig, # Predictor or marker value
+    entry = NULL, # Entry time for the subjects, default is NULL, why 0?
+    predict.time = predict.time, # Time point of the ROC curve
+    cut.values = NULL, # marker values to use as a cut-off for calculation of sensitivity and specificity
+    method = "NNE", 
+    span = 0.25 * nrow(tmp.surv.data)^(-0.2) # small span yield moderate smoothing, how to select?
+    )
+  
+  res.tdauc[i] <- temp$AUC
+  
+  g <- ggplot(data = data.frame(TP = temp$TP, FP = temp$FP)) +
+    geom_point(aes(x = FP, y = TP), size = 0.2) + 
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
+    labs(
+      title = paste("tdROC for prediction time =", predict.time),
+      subtitle = paste("tdAUC =", round(temp$AUC, 3))
+    )
+  
+  res.tdroc[[i]] <- g
+}
+
+res.c.naive <- survcomp::concordance.index(
+  x = linpred.orig, # vector of risk predictions
+  surv.time = tmp.surv.data$time, # vector of event times
+  surv.event = tmp.surv.data$event, # vector of event occurence indicators
+  method = "noether" # conservative, noether or name (see paper Pencina et al. for details)
+  )
+
+#ls(res.c.naive)
+
+res.c.naive$c.index
+```
+
+```{r, fig.width=15, fig.height=6}
+ggpubr::ggarrange(plotlist = res.tdroc, ncol = 5, nrow = 2)
+```
+
+```{r}
+data.frame(prediction.time = delta.T, 
+           tdAUC = res.tdauc) %>%
+  ggplot + geom_point(aes(x = prediction.time,
+                          y = tdAUC)) + 
+  coord_cartesian(ylim = c(0, 1))
+```
+
+
+
+
+
+```{r, eval=FALSE}
+# DO NOT RUN
+
+# an extract from original code for debug
+
+# debug for survivalROC
+Stime = tmp.surv.data$time
+status = tmp.surv.data$event
+marker = linpred.orig
+x <- marker
+
+
+times=Stime
+x <- marker
+
+entry=NULL
+cut.values=NULL
+method="NNE"
+lambda=NULL
+span=NULL
+window="symmetric"
+
+
+if( is.null(entry) ) entry <- rep( 0, length(times) )
+##
+bad <- is.na(times) | is.na(status) | is.na(x) | is.na(entry)
+entry <- entry[!bad]
+times <- times[!bad]
+status <- status[!bad]
+x <- x[!bad]
+if( sum(bad)>0 ) cat(paste("\n", sum(bad),
+			"records with missing values dropped. \n") )
+## 
+if( is.null(cut.values) ) cut.values <- unique(x)
+cut.values <- cut.values[ order(cut.values) ]
+ncuts <- length(cut.values)
+##
+###
+### sort the times
+###
+##
+ooo <- order( times )
+times <- times[ooo]
+status <- status[ooo]
+x <- x[ooo]
+##
+###
+### overall survival probability
+###
+##
+s0 <- 1.0
+unique.t0 <- unique( times )
+unique.t0 <- unique.t0[ order(unique.t0) ]
+## print( unique.t0 )
+n.times <- sum( unique.t0 <= predict.time )
+
+for( j in 1:n.times ){
+	n<-sum( entry <= unique.t0[j] & times >= unique.t0[j] )
+	d<-sum( (entry <= unique.t0[j])&(times==unique.t0[j])&(status==1) )
+	if( n>0 ) s0<-s0*( 1 - d/n )
+	
+	
+	
+	
+```
+
+
+
+
+## compare predicted trajectory
+
+```{r, eval=FALSE}
+#id.dympred <- sample(long$id, 1)
+id.dympred <- 1351 # manual
+
+# View all actual values for subject of interest
+long %>% filter(id == id.dympred) %>% # 1351
+  mutate(across(all_of(y.names), as.numeric)) %>%
+  pivot_longer(cols = y.names, names_to = "y") %>%
+  ggplot() +
+    geom_point(aes(get(y.t), value, group = id), alpha = 1, na.rm = TRUE) +
+#    geom_line(aes(get(y.t), value, group = id), alpha = 0.1, na.rm = TRUE) +
+    facet_wrap(~y, ncol = 2)
+```
+
+
+
+```{r, fig.width=12}
+# plot all Tstart to demonstrate dynamic prediction
+
+# select prediction window first
+deltaT.idx <- 1 # set index of prediction window in deltaT
+
+# randomly choose a subject
+id.dympred <- sample(DP.id[[length(Tstart)]][[deltaT.idx]], 1) # select which subject to visualize
+# to make sure this id appears in all DP sets for different Tstart => select id from last set
+
+#id.dympred <- 1351 # manual
+
+list.plots <- vector(mode = "list", length = length(y.names))
+
+for (y.idx in 1:length(y.names)){ # For each longitudinal covariate
+  
+  list.plots[[y.idx]] <- lapply(1:length(Tstart), function(Tstart.idx){ # For each Tstart
+
+    tmp.subject <- which(DP.id[[Tstart.idx]][[deltaT.idx]] == id.dympred) # from subject at-risk, NB: it is different, subset from full set based on landmark
+    tmp.traj <- data.frame(t = obstime, 
+                           y = DP.long[[Tstart.idx]][[deltaT.idx]][tmp.subject, , y.idx])
+    
+    tmp.actual <- long %>% filter(id == id.dympred) %>% select(y.t, y.names[y.idx])
+    
+    g <- ggplot(data = NULL) + 
+      # plot actual values
+      geom_point(
+        data = tmp.actual,
+        aes(get(y.t), get(y.names[y.idx])),
+        alpha = 1, 
+        na.rm = TRUE) + 
+      # add predicted trajectory
+      geom_point(
+        data = tmp.traj,
+        aes(t, y),
+        alpha = 1, color = "red", shape = 4) +
+      geom_smooth(
+        data = tmp.traj,
+        aes(t, y),
+        se = FALSE,
+        alpha = 1, lty = "dashed", color = "red", size = 0.5) + 
+      # add landmark
+      geom_vline(
+        xintercept = Tstart[Tstart.idx], # landmark time
+        alpha = 0.5) +
+      ylab(y.names[y.idx]) + xlab("Time after baseline (yr)") +
+      labs(
+        title = paste("Predicted trajectory (dashed line) and observed values (dot) of", y.names[y.idx]),
+        subtitle = paste(
+          "subject ID = ", id.dympred, 
+          ", event = ", surv$event[surv$id == id.dympred],
+          ", event time = ", round(surv$time[surv$id == id.dympred], 1)
+          ),
+        caption = paste(
+          "Baseline covariates | age =", surv$AGE[surv$id == id.dympred],
+          ", gender =", surv$PTGENDER[surv$id == id.dympred],
+          ", edu =", surv$PTEDUCAT[surv$id == id.dympred],
+          ", APOE4 =", surv$APOE4[surv$id == id.dympred]
+        )
+      )
+    return(g)})
+  
+  print(ggpubr::ggarrange(plotlist = list.plots[[y.idx]]))
+}
+```

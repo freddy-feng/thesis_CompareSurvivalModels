@@ -1,0 +1,757 @@
+---
+title: "Untitled"
+author: "Yibin Feng"
+date: '2022-05-26'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Dependencies
+
+```{r}
+rm(list = ls())
+
+library(tidyverse)
+library(ggpubr)
+library(ggfortify)
+
+library(survival)
+library(survminer)
+
+library(Hmisc)
+library(ADNIMERGE)
+```
+
+# Import data
+
+```{r}
+load("adni_cleaned_prc.RData")
+```
+
+
+# Checking prepared datasets
+
+```{r, eval=FALSE}
+# double check values of var X.bl and var X at VISCODE == bl
+
+#df.surv_to_check <- df.clean
+df.surv_to_check <- df.surv_preds_prc
+
+# select variables containing suffix ".bl" for checking
+vars_with_bl <- names(df.surv_to_check)[grepl(".bl", names(df.surv_to_check), fixed=TRUE)]
+vars_with_bl <- vars_with_bl[!vars_with_bl %in% c("Years.bl", "Month.bl")] # exclude
+
+# logic check
+res.compare <- data.frame(vars_with_bl)
+for (x in vars_with_bl){
+  x.no_bl <- gsub(".bl", "", x)
+  tmp <- df.surv_to_check %>% filter(VISCODE == "bl") %>% select(RID, x, x.no_bl)
+  tmp <- tmp %>% mutate(isSame = identical(get(x), get(x.no_bl)))
+  res.compare$allSame[which(x == vars_with_bl)] <- all(tmp$isSame)
+}
+
+View(res.compare)
+
+# visual check
+for (x in vars_with_bl){
+  x.no_bl <- gsub(".bl", "", x)
+  tmp <- df.surv_to_check %>% filter(VISCODE == "bl") %>% select(RID, x, x.no_bl) 
+  g <- tmp %>% ggplot +
+    geom_point(aes(get(x), get(x.no_bl))) +
+    labs(title = "compare value with var X.bl and var X at VISCODE == bl") +
+    xlab(x) + ylab(x.no_bl)
+  print(g)
+}
+```
+
+# Check frequency of different protocol in prepared data
+
+```{r}
+# Cross-table of dementia / censoring
+print("[Summary] cross table for df.surv_preds:")
+table(df.surv_preds %>% select(ORIGPROT, event))
+```
+
+# Check missing values
+
+```{r, eval=FALSE}
+# Check missing data
+
+# Difficult to read
+df.surv_preds %>% 
+  naniar::vis_miss()
+```
+
+
+### NAs in repeated measurement
+
+#### Cognitive assessment
+
+```{r, fig.width=12}
+check_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
+
+plots <- lapply(check_covariates, function(feature){
+  df.long %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n.visits = n(),
+    n.missing = sum(is.na(get(feature))),
+    p.missing = n.missing / n.visits,
+    time = unique(time)
+    ) %>%
+  ggplot() +
+    geom_histogram(aes(p.missing), binwidth = 0.05) +
+    coord_cartesian(xlim = c(0, 1)) +
+    labs(
+      title = paste("Percentage of missing value(s) in", feature),
+      x = "Ratio of NAs to # visits per subject"
+    ) + 
+    theme(
+      title = element_text(size = 8)
+    )
+})
+
+ggarrange(plotlist = plots)
+```
+
+
+
+```{r, fig.width=12}
+check_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
+
+plots <- lapply(check_covariates, function(feature){
+  df.long %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n.visits = n(),
+    n.missing = sum(is.na(get(feature))),
+    p.missing = n.missing / n.visits,
+    time = unique(time),
+    protocol = unique(COLPROT)
+    ) %>%
+  ggplot() + 
+    geom_jitter(aes(time, p.missing, color = protocol),
+                alpha = 0.2) +
+    coord_cartesian(ylim = c(0, 1)) +
+    labs(
+      title = paste("Covariate =", feature),
+      x = "Time to event (year)",
+      y = "Ratio of NAs to # visits per subject"
+    ) + 
+    theme(
+      title = element_text(size = 8)
+    )
+})
+
+p <- ggarrange(plotlist = plots, common.legend = TRUE)
+annotate_figure(
+  p, 
+  top = text_grob("Per subject NAs ratio against follow-up time by data collection protocol", 
+                  face = "bold")
+  )
+```
+
+#### Imaging
+
+```{r, fig.width=12}
+check_covariates <- c("Ventricles", "Hippocampus", "WholeBrain", "Entorhinal", "Fusiform", "MidTemp")
+
+plots <- lapply(check_covariates, function(feature){
+  df.long %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n.visits = n(),
+    n.missing = sum(is.na(get(feature))),
+    p.missing = n.missing / n.visits,
+    time = unique(time)
+    ) %>%
+  ggplot() +
+    geom_histogram(aes(p.missing), binwidth = 0.05) +
+    coord_cartesian(xlim = c(0, 1)) +
+    labs(
+      title = paste("Percentage of missing value(s) in", feature),
+      x = "Ratio of NAs to # visits per subject"
+    ) + 
+    theme(
+      title = element_text(size = 8)
+    )
+})
+
+ggarrange(plotlist = plots)
+```
+
+
+```{r, fig.width=12}
+check_covariates <- c("Ventricles", "Hippocampus", "WholeBrain", "Entorhinal", "Fusiform", "MidTemp")
+
+plots <- lapply(check_covariates, function(feature){
+  df.long %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n.visits = n(),
+    n.missing = sum(is.na(get(feature))),
+    p.missing = n.missing / n.visits,
+    time = unique(time),
+    protocol = unique(COLPROT)
+    ) %>%
+  ggplot() + 
+    geom_jitter(aes(time, p.missing, color = protocol),
+                alpha = 0.2) +
+    coord_cartesian(ylim = c(0, 1)) +
+    labs(
+      title = paste("Covariate =", feature),
+      x = "Time to event (year)",
+      y = "Ratio of NAs to # visits per subject"
+    ) + 
+    theme(
+      title = element_text(size = 8)
+    )
+})
+
+p <- ggarrange(plotlist = plots, common.legend = TRUE)
+annotate_figure(
+  p, 
+  top = text_grob("Per subject NAs ratio against follow-up time by data collection protocol", 
+                  face = "bold")
+  )
+```
+
+#### ABETA TAU PTAU
+
+```{r, fig.width=12}
+check_covariates <- c("ABETA", "TAU", "PTAU")
+
+plots <- lapply(check_covariates, function(feature){
+  df.long %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n.visits = n(),
+    n.missing = sum(is.na(get(feature))),
+    p.missing = n.missing / n.visits,
+    time = unique(time)
+    ) %>%
+  ggplot() +
+    geom_histogram(aes(p.missing), binwidth = 0.05) +
+    coord_cartesian(xlim = c(0, 1)) +
+    labs(
+      title = paste("Percentage of missing value(s) in", feature),
+      x = "Ratio of NAs to # visits per subject"
+    ) + 
+    theme(
+      title = element_text(size = 8)
+    )
+})
+
+ggarrange(plotlist = plots)
+```
+
+```{r, fig.width=12}
+check_covariates <- c("ABETA", "TAU", "PTAU")
+
+plots <- lapply(check_covariates, function(feature){
+  df.long %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n.visits = n(),
+    n.missing = sum(is.na(get(feature))),
+    p.missing = n.missing / n.visits,
+    time = unique(time),
+    protocol = unique(ORIGPROT)
+    ) %>%
+  ggplot() + 
+    geom_jitter(aes(time, p.missing, color = protocol),
+                alpha = 0.2) +
+    coord_cartesian(ylim = c(0, 1)) +
+    labs(
+      title = paste("Covariate =", feature),
+      x = "Time to event (year)",
+      y = "Ratio of NAs to # visits per subject"
+    ) + 
+    theme(
+      title = element_text(size = 8)
+    )
+})
+
+p <- ggarrange(plotlist = plots, common.legend = TRUE)
+annotate_figure(
+  p, 
+  top = text_grob("Per subject NAs ratio against follow-up time by data collection protocol", 
+                  face = "bold")
+  )
+```
+
+
+```{r, fig.width=12}
+check_covariates <- c("ABETA", "TAU", "PTAU")
+
+plots <- lapply(check_covariates, function(feature){
+  df.long %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n.visits = n(),
+    n.missing = sum(is.na(get(feature))),
+    p.missing = n.missing / n.visits,
+    time = unique(time),
+    protocol = unique(COLPROT)
+    ) %>%
+  ggplot() + 
+    geom_jitter(aes(time, p.missing, color = protocol),
+                alpha = 0.2) +
+    coord_cartesian(ylim = c(0, 1)) +
+    labs(
+      title = paste("Covariate =", feature),
+      x = "Time to event (year)",
+      y = "Ratio of NAs to # visits per subject"
+    ) + 
+    theme(
+      title = element_text(size = 8)
+    )
+})
+
+p <- ggarrange(plotlist = plots, common.legend = TRUE)
+annotate_figure(
+  p, 
+  top = text_grob("Per subject NAs ratio against follow-up time by data collection protocol", 
+                  face = "bold")
+  )
+```
+
+#### Summary
+
+```{r}
+df.long %>%
+  summarytools::descr() %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate(Pct.Valid = round(Pct.Valid / 100, 3)) %>% # Convert from [0,100] to [0,1]
+  select(N.Valid, Pct.Valid) %>% 
+  arrange(Pct.Valid)
+```
+
+
+
+
+# Survival curves
+
+- Subjects must stay in the same group over their entire observation time i.e. non-time-dependent
+- msm routine estimates time until progress occured. survfit estimates time until progress was observed.
+- Aalen-Johansen method used by survfit does not account for interval censoring.
+
+
+```{r}
+# Check visually
+ggsurvplot(survfit(Surv(time, status == "dementia") ~ 1,
+                   data = df.surv_preds))
+
+ggsurvplot(survfit(Surv(time, status == "dementia") ~ 1,
+                   data = df.surv_preds),
+           fun = "pct") # Surv prob in percentage
+
+ggsurvplot(survfit(Surv(time, status == "dementia") ~ 1,
+                   data = df.surv_preds),
+           fun = "cumhaz") # Cumulative hazard
+```
+
+
+
+
+```{r, fig.height=6}
+ggsurvplot(survfit(Surv(time, status=="dementia") ~ PTGENDER,
+                   data = df.surv_preds),
+           conf.int = TRUE,
+           risk.table = TRUE,
+           legend.labs = c("Female", "Male"))
+```
+
+```{r, fig.height=4}
+ggsurvplot(survfit(Surv(time, status=="dementia") ~ PTGENDER,
+                   data = df.surv_preds),
+           conf.int = TRUE,
+           risk.table = FALSE,
+           legend.labs = c("Female", "Male"))
+```
+
+```{r, fig.height=8}
+ggsurvplot(survfit(Surv(time, status=="dementia") ~ ORIGPROT,
+                   data = df.surv_preds),
+           conf.int = TRUE,
+           risk.table = TRUE)
+```
+
+
+```{r, fig.height=6}
+# Known genetic risk factor
+ggsurvplot(survfit(Surv(time, status=="dementia") ~ APOE4,
+                   data = df.surv_preds),
+           conf.int = TRUE,
+           risk.table = TRUE)
+```
+
+
+
+
+```{r, fig.height=8}
+# This is dubious! Time-dependent? or assume it's baseline. How to interpret?
+ggsurvplot(survfit(Surv(time, status=="dementia") ~ DX.bl,
+                   data = df.surv_preds),
+           conf.int = TRUE,
+           risk.table = TRUE)
+```
+
+
+```{r, fig.height=8}
+ggsurvplot(survfit(Surv(time, status=="dementia") ~ status.bl,
+                   data = df.surv_preds),
+           conf.int = TRUE,
+           risk.table = TRUE,
+           title = "KM curve by baseline diagnosis")
+```
+
+
+
+# Progression of ADAS13 compared to diagnosis
+
+```{r, eval=FALSE}
+# to do: add spaghetti
+Plot.progression <- function(df=df.clean, rid, var.name){
+  
+  subplots <- list(
+    df %>% filter(RID == rid) %>% 
+      ggplot() + geom_point(aes(M, DX)) + 
+      labs(title = "DX over visits"),
+    df %>% filter(RID == rid) %>% 
+      ggplot() + geom_point(aes(M, get(var.name))) + 
+      labs(title = paste(var.name, "over visits"),
+           y = var.name)
+    )
+  
+  ggarrange(plotlist = subplots)
+  
+}
+```
+
+
+```{r}
+# Plot.progression(df.clean, 30, "ADAS13")
+# Plot.progression(df.clean, 2, "ADAS13")
+```
+
+# Distribution of ADAS13
+
+```{r}
+df.clean %>% ggplot() +
+  geom_violin(aes(DX, ADAS13,
+                  fill = DX))
+```
+
+```{r}
+df.clean %>% ggplot() +
+  geom_violin(aes(DX, EcogPtTotal,
+                  fill = DX))
+```
+
+```{r, fig.width=12}
+df.long %>% 
+  ggplot() +
+    geom_line(aes(Years.bl, ADAS13, group = RID, color = status),
+              alpha=0.4) +
+    ggtitle("Spaghetti chart of ADAS13") +
+    facet_wrap(vars(DX.bl), nrow = 1) + 
+    theme(
+      legend.position = "top"
+    )
+```
+
+
+# Visualize longitudinal data
+
+### Literature covariates
+
+```{r, fig.width=12}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+plot_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(M, get(feature), group = RID, color = status),
+                alpha = 0.4) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```
+
+```{r, fig.width=12}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+plot_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long_censored %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(M, get(feature), group = RID, color = status),
+                alpha = 0.4) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```
+
+#### Random subset of subjects
+
+```{r, fig.width=12}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+set.seed(721)
+
+size <- 100
+random_RID <- df.surv$RID %>% sample(size)
+
+plot_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long %>%
+    filter(RID %in% random_RID) %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(Years.bl, get(feature), group = RID, color = status),
+                alpha = 0.8) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis for", size, "random samples"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```
+
+```{r, fig.width=8, fig.height=4}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+set.seed(721)
+
+size <- 20
+random_RID <- df.surv_preds$RID %>% sample(size)
+
+plot_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long_censored %>%
+    filter(RID %in% random_RID) %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(Years.bl, get(feature), group = RID),
+                alpha = 0.02,
+                data = df.long_censored) + # Base plot all subjects
+      geom_line(aes(Years.bl, get(feature), group = RID, linetype = status),
+                alpha = 1) +
+      geom_point(aes(Years.bl, get(feature), group = RID, shape = status, color = status),
+                alpha = 1) +
+      scale_y_continuous(limits = c(0, NA)) + 
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis for", size, "random subjects"),
+        caption = "Baseline diagnosis - cognitive normal (left panel), mild cognitive impairment (right panel)",
+        x = "Years after baseline",
+        y = feature,
+        shape = "Outcome",
+        color = "Outcome",
+        linetype = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      ) +
+      theme_pubr()
+})
+
+plots
+
+```
+
+#### Interpolated
+
+```{r, fig.width=12}
+# Interpolate points across NAs
+
+plot_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long[!is.na(df.long[feature]),] %>% # Drop na
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(M, get(feature), group = RID, color = status),
+                alpha = 0.4) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```
+
+### Imaging covariates
+
+
+```{r, fig.width=12}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+
+plot_covariates <- c("Ventricles", "Hippocampus", "WholeBrain", "Entorhinal", "Fusiform", "MidTemp")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(Years.bl, get(feature), group = RID, color = status),
+                alpha = 0.8) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```
+
+
+```{r, fig.width=12}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+set.seed(721)
+random_RID <- df.surv$RID %>% sample(100)
+
+plot_covariates <- c("Ventricles", "Hippocampus", "WholeBrain", "Entorhinal", "Fusiform", "MidTemp")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long %>%
+    filter(RID %in% random_RID) %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(Years.bl, get(feature), group = RID, color = status),
+                alpha = 0.8) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```
+
+### ABETA TAU PTAU
+
+```{r, fig.width=12}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+
+plot_covariates <- c("ABETA", "TAU", "PTAU")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(Years.bl, get(feature), group = RID, color = status),
+                alpha = 0.8) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```
+
+```{r, fig.width=12}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+set.seed(721)
+random_RID <- df.surv$RID %>% sample(100)
+
+plot_covariates <- c("ABETA", "TAU", "PTAU")
+
+plots <- lapply(plot_covariates, function(feature){
+  df.long %>%
+    filter(RID %in% random_RID) %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      geom_line(aes(Years.bl, get(feature), group = RID, color = status),
+                alpha = 0.8) +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis"),
+        x = "Years after baseline",
+        y = feature,
+        color = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      )
+})
+
+plots
+
+```

@@ -1,0 +1,541 @@
+---
+title: "IDA_adnimerge"
+author: "Yibin Feng"
+date: "1/31/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Install ADNIMERGE
+
+```{r}
+#install.packages("Hmisc")
+#install.packages("restricted/ADNIMERGE_0.0.1.tar.gz", repos=NULL, type="source")
+```
+
+# Load package
+
+```{r}
+rm(list = ls())
+
+library(tidyverse)
+library(ggpubr)
+library(ggfortify)
+
+
+library(Hmisc)
+library(ADNIMERGE)
+```
+
+
+# Instruction
+
+- ADNIMERGE package contains all ADNI data files
+- One of the dataframes is adnimerge which contains commonly used variables.
+
+
+```{r, eval=FALSE}
+help(package = "ADNIMERGE")
+```
+
+# Utility function
+Define some utility functions for future use here.
+
+```{r}
+get_datadic <- function(variables, table = 'ADNIMERGE', all = F){
+  # Retrieve all info from datadict, or most frequently used info
+  if (all) {
+    subset(datadic, TBLNAME == table & FLDNAME %in% variables)
+  } else {
+    subset(datadic, TBLNAME == table & FLDNAME %in% variables,
+           c('FLDNAME', 'TBLNAME', 'TEXT', 'NOTES'))
+  }
+}
+```
+
+# IDA of dataframe `adnimerge`
+
+This section does not involve any data preparation.
+
+## Variable names
+
+List all
+```{r, eval=FALSE}
+names(adnimerge)
+```
+
+variable names containing ".bl", note `Years.bl` and `Month.bl` are not baseline values but time-varying
+```{r}
+names(adnimerge)[grepl(".bl", names(adnimerge))]
+```
+variable names not containing ".bl"
+```{r}
+names(adnimerge)[!grepl(".bl", names(adnimerge))]
+```
+
+Baseline covariates
+```{r}
+vars_baseline <- c("AGE", "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4")
+
+get_datadic(vars_baseline)
+```
+
+
+## Identifier for subject
+
+Look up the datadic.
+```{r}
+get_datadic(variables = "RID")
+```
+
+Count unique RIDs.
+```{r}
+print(paste("Number of subjects in adnimerge =", length(unique(adnimerge$RID))))
+```
+
+## Multiple identifier for time
+There are multiple variables related to time i.e. "VISCODE", "EXAMDATE", "Years.bl", "Month.bl", "Month", "M".
+What are the differences?
+Look up datadic
+```{r}
+get_datadic(variables = c("VISCODE", "EXAMDATE", "Years.bl", "Month.bl", "Month", "M"))
+```
+
+We summarize the findings here and elaborate them further below:
+- `Month`, `M` are not based on exact date.
+- `Month` is factor, but `M` is numeric (integer).
+- `Month` may differs from `M`, despite both are said to be months since baseline.
+- `M` is mostly consistent with `VISCODE` e.g. M==6 and VISCODE==m06.
+- `Years.bl`, `Month.bl` description are missing in datadic.
+- `Years.bl`, `Month.bl` do not represent a baseline value and are time-varying, contrary to other variables with `.bl` suffix e.g. `EXAMDATE.bl`.
+- `Years.bl`, `Month.bl` measures the actual follow-up time (in years or months) after baseline `EXAMDATE`.
+
+
+```{r}
+adnimerge %>%
+  select("VISCODE", "Month", "M", "EXAMDATE", "EXAMDATE.bl", "Years.bl", "Month.bl") %>%
+  str()
+```
+
+"M" is consistent with the "VISCODE"
+```{r}
+tmp_viscode <- adnimerge$VISCODE
+tmp_viscode[tmp_viscode == "bl"] <- "m00" # Set bl to m00, so format is consistent with m06, m12 etc.
+tmp_viscode <- sapply(tmp_viscode, function(x) {
+  as.numeric(strsplit(x, split = "m")[[1]][2])
+})
+
+print(paste("[Check] all VISCODE identical to M:", all(tmp_viscode == adnimerge$M)))
+```
+
+Construct the Years.bl and Month.bl using EXAMDATE:
+```{r}
+adnimerge %>%
+  filter(RID == 2) %>%
+  select("VISCODE", "Month", "M", "EXAMDATE", "EXAMDATE.bl", "Years.bl", "Month.bl") %>%
+  mutate(verify_Days.bl = as.numeric(EXAMDATE - EXAMDATE.bl),
+         verify_Years.bl = verify_Days.bl / 365.25,
+         verify_Months.bl = verify_Years.bl * 12)
+```
+
+Now we compute the differences using our deduced conversion formula:
+
+Years.bl = (EXAMDATE - EXAMDATE.bl) / 365.25?
+```{r}
+# Deduced that two should be convertible from Month.bl = (EXAMDATE - EXAMDATE.bl) / 366 * 12
+adnimerge %>% 
+  select(RID, EXAMDATE.bl, EXAMDATE, Years.bl) %>%
+  mutate(time_followup = as.numeric((EXAMDATE - EXAMDATE.bl) / 365.25)) %>%
+  mutate(abs_diff = abs(time_followup - Years.bl)) %>%
+  select(abs_diff) %>% colSums()
+```
+
+Month.bl = (EXAMDATE - EXAMDATE.bl) / 365.25 * 12?
+```{r}
+# Deduced that two should be convertible from Month.bl = (EXAMDATE - EXAMDATE.bl) / 366 * 12
+adnimerge %>% 
+  select(RID, EXAMDATE.bl, EXAMDATE, Month.bl) %>%
+  mutate(time_followup = as.numeric((EXAMDATE - EXAMDATE.bl) / 365.25 * 12)) %>%
+  mutate(abs_diff = abs(time_followup - Month.bl)) %>%
+  select(abs_diff) %>% colSums()
+```
+
+One more thing, are `M` and `Month` identical?
+Not always!
+```{r}
+(adnimerge$Month == adnimerge$M) %>% 
+  table()
+```
+
+Contrast the differences between `M` and `Month`:
+
+levels in `Month`:
+```{r}
+as.numeric(levels(adnimerge$Month))
+```
+
+unique values of `M`:
+```{r}
+sort(unique(adnimerge$M))
+```
+
+When does these two disagree?
+For example, we observe that for subject RID 31, `Month` == 60 and 72 appear twice.
+We consider the `Month.bl` equivalent to `EXAMDATE` as the ground truth.
+The first `Month` == 60 matches with the `Month.bl` exactly, but there is mismatch with `VISCODE` == 54.
+The second `Month` == 60 differs from `Month.bl` by 1 month, and matches the `VISCODE`.
+
+A guess is that `Month` is factorize on a predefined, regular grid, and the actual visit time is approximated to the nearest grid.
+There is a risk double entry at one time may cause data error in some modeling using regular time grid, e.g. MFPCCox
+
+```{r}
+adnimerge %>%
+  select(RID, VISCODE, EXAMDATE, Month.bl, Month, M) %>%
+  mutate(is_difference = !(Month == M)) %>%
+  filter(RID == 31, M > 42, M < 84) # Pick subject RID 31 as example
+```
+
+Look at data gathered at two `Month` == 60 took place on 2010-10-28 and 2010-12-01:
+- From two different COLPROT (collection protocol) ADNI1 and ADNIGO
+- No measurement values for first visit.
+
+```{r}
+adnimerge %>%
+  filter(RID == 31, Month == 60) %>%
+  select(names(adnimerge)[!grepl(".bl", names(adnimerge))]) # Exclude .bl
+```
+
+Similar at two `Month` == 72:
+- From two different COLPROT (collection protocol) ADNIGO and ADNI2
+- No measurement values for first visit.
+
+```{r}
+adnimerge %>%
+  filter(RID == 31, Month == 72) %>%
+  select(names(adnimerge)[!grepl(".bl", names(adnimerge))]) # Exclude .bl
+```
+
+List all subjects with this `Month` != `M` issue to have a broader look:
+```{r}
+adnimerge %>%
+  select(RID, VISCODE, EXAMDATE, Month.bl, Month, M) %>%
+  filter(!(Month == M))
+```
+
+Subset potentially problematic observations with this problem to probe into observations:
+- Not all cases related to changing COLPROT, see RID 2
+- Not all case involve double entry, see RID 29
+
+### Considerations for data cleaning
+
+Two problems we found when selecting the time label, first is double entry, second is mismatch between M, Month, Month.bl
+
+1) whether double entry will happen on `Month` or `M`?'
+Both.
+In all cases except one, the `Month` count is less than number of visits, implying double entry.
+In one case, RID 6014, the `M` count is less than number of visits, n_visit = 4, n_M = 3
+
+2) which one is closer to the ground truth `EXAMDATE` when used as time label?
+`Month` by eye test
+
+3) at times of double entry, whether these entries contain different values or single value?
+RID 98, `Month` == 12 has two entries, contain different values.
+RID 6014, `M` == 0 has two entries, only one entry contains values, other one is NAs.
+
+3) if we have to use a regular time grid for some methods, whether to use `Month` or `M`?
+`M` (numeric, stick to viscode, more different from EXAMDATE) or `Month` (closer to truth, need to handle different values at same time label, factor)
+
+```{r}
+tmp <- adnimerge %>%
+  select(RID, VISCODE, EXAMDATE, Month.bl, Month, M) %>%
+  filter(!(Month == M)) %>%
+  select(RID, Month)
+
+tmp2 <- lapply(1:nrow(tmp), function(i) {
+  adnimerge %>%
+    filter(RID == tmp[i, "RID"], Month == tmp[i, "Month"]) %>%
+    select(Month.bl, names(adnimerge)[!grepl(".bl", names(adnimerge))]) # Exclude .bl
+})
+
+tmp3 <- do.call(rbind, tmp2) %>%
+  select(RID, COLPROT, ORIGPROT, VISCODE, M, Month, Month.bl, EXAMDATE, everything())
+
+tmp3
+```
+
+descriptive statistics of this issue:
+```{r}
+adnimerge %>%
+  #filter(RID == 31) %>%
+  group_by(RID) %>%
+  dplyr::summarize(
+    n_visit = n(),
+    n_Month = length(unique(Month)),
+    n_M = length(unique(M)),
+    visit_Month = n_visit == n_Month,
+    visit_M = n_visit == n_M, 
+    all_n_equal = visit_Month & visit_M
+    ) %>%
+  filter(!all_n_equal)
+```
+
+Probe RID 6014, we find that:
+- `M` == 0 appears twice and `EXAMDATE` are close
+- `Month` == 3 is way off and incorrect to describe EXAMDATE
+- good news is that we can drop the one filled with NAs `Month` == 3
+- but no idea why it exists at first place?
+```{r}
+adnimerge %>%
+  filter(RID == 6014) %>%
+  select(names(adnimerge)[!grepl(".bl", names(adnimerge))]) %>% # Exclude .bl
+  select(Month, M, VISCODE, EXAMDATE, everything())
+```
+## Ethnicity and race
+
+Underrepresented. Make sure to mention this in thesis.
+Why white is dominant in this population?
+What is the difference between ethnicity Hisp/Latino and other?
+
+```{r}
+adnimerge %>% 
+  select(PTETHCAT, PTRACCAT) %>% 
+  summary()
+```
+
+
+
+## Age
+
+- There are NAs in baseline age, need to be cleaned
+```{r}
+adnimerge %>%
+  select(AGE) %>%
+  summary()
+```
+
+## Follow up period
+
+```{r}
+adnimerge %>%
+  group_by(RID) %>%
+  dplyr::summarize(last.visit = max(Years.bl),
+            ORIGPROT = unique(ORIGPROT)) %>%
+  ggplot() + 
+    geom_histogram(aes(last.visit), 
+                   binwidth = 1) +
+    facet_wrap(vars(ORIGPROT)) +
+    labs(title = "Observation period in each ADNI phase",
+         x = "Years since baseline")
+```
+
+```{r}
+adnimerge %>%
+  group_by(RID) %>%
+  dplyr::summarize(last.visit = max(Years.bl),
+            ORIGPROT = unique(ORIGPROT)) %>%
+  ggplot() + 
+    geom_histogram(aes(last.visit), 
+                   binwidth = 1) +
+    facet_wrap(vars(ORIGPROT)) +
+    labs(title = "Observation period by each ADNI phase",
+         x = "Years since baseline")
+```
+
+```{r}
+adnimerge %>%
+  group_by(RID) %>%
+  dplyr::summarize(last.visit = max(Years.bl),
+            ORIGPROT = unique(ORIGPROT),
+            DX.bl = unique(DX.bl)) %>%
+  ggplot() + 
+    geom_jitter(aes(last.visit, DX.bl,
+                    color = DX.bl)) +
+    facet_wrap(vars(ORIGPROT)) +
+    labs(title = "Observation period by baseline diagnosis DX.bl in different ADNI phase",
+         x = "Year since baseline")
+```
+
+### Consideration for data cleaning
+Exclude subjects DX == NA or Dementia at baseline
+
+```{r}
+adnimerge %>%
+  group_by(RID) %>%
+  dplyr::summarize(last.visit = max(Years.bl),
+            ORIGPROT = unique(ORIGPROT)) %>%
+  left_join(adnimerge %>% filter(VISCODE == "bl") %>% select(RID, DX), by = "RID") %>%
+  ggplot() + 
+    geom_jitter(aes(last.visit, DX,
+                    color = DX),
+                alpha = 0.5) +
+    facet_wrap(vars(ORIGPROT)) +
+    labs(title = "Observation period by diagnosis DX at baseline in different ADNI phase",
+         subtitle = "baseline filter by VISCODE = bl",
+         x = "Years since baseline")
+```
+
+```{r}
+# distribution of follow-up period
+adnimerge %>% 
+  group_by(RID) %>%
+  dplyr::summarize(fup.period = max(Years.bl)) %>%
+  select(fup.period) %>%
+  summary()
+
+```
+
+## Average distinct values per variables
+
+```{r, eval=FALSE}
+# Compute average distinct values per variables
+adnimerge %>%
+  group_by(RID) %>%
+  select(names(adnimerge)[!grepl(".bl", names(adnimerge))]) %>% # Exclude .bl
+  dplyr::summarise(across(everything(), n_distinct)) %>%
+  dplyr::select(-RID) %>%
+  dplyr::summarise(across(everything(), mean)) %>%
+  pivot_longer(cols = everything(), names_to = "var_name", values_to = "avg_distinct_values") %>%
+  arrange(desc(avg_distinct_values)) %>% 
+  View()
+```
+
+```{r, eval=FALSE}
+# Compute max distinct values per variables
+adnimerge %>%
+  group_by(RID) %>%
+  select(names(adnimerge)[!grepl(".bl", names(adnimerge))]) %>% # Exclude .bl
+  dplyr::summarise(across(everything(), n_distinct)) %>%
+  dplyr::select(-RID) %>%
+  dplyr::summarise(across(everything(), max)) %>%
+  pivot_longer(cols = everything(), names_to = "var_name", values_to = "max_distinct_values") %>%
+  arrange(desc(max_distinct_values)) %>% 
+  View()
+```
+
+## Number of visits
+
+### Consideration for data cleaning
+Exclude subjects with only single visit i.e. at baseline only, no repeated measurement
+
+```{r}
+ids_one_visit <- adnimerge %>%
+  group_by(RID) %>%
+  dplyr::summarize(last.visit = max(M)) %>%
+  filter(last.visit == 0) %>%
+  select(RID) %>%
+  unlist()
+
+adnimerge %>%
+  filter(RID %in% ids_one_visit) %>%
+  select(RID, DX.bl, DX)
+```
+
+
+```{r}
+adnimerge %>% 
+  group_by(RID) %>%
+  dplyr::summarize(n.visits = n()) %>%
+  ggplot() +
+    geom_bar(aes(n.visits)) +
+    labs(
+      title = "Number of visits",
+      subtitle = "But not every visit has measurements, observation is irregular!"
+    )
+```
+
+## NAs in baseline covariates
+```{r}
+vars_baseline <- c("AGE", "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4")
+adnimerge %>% 
+  select(vars_baseline) %>% 
+  summary()
+```
+
+
+## Event of interest i.e. diagnosis
+```{r, eval=FALSE}
+# Check DX at baseline
+adnimerge %>% filter(VISCODE == "bl") %>% select(DX) %>% summarytools::freq()
+```
+
+### Who are the DX.bl == "AD"?
+
+```{r}
+adnimerge %>% 
+  filter(DX.bl == "AD") %>%
+  select(RID, DX.bl, DX, EXAMDATE, M) %>%
+  tail()
+```
+
+```{r}
+# At baseline row
+with(adnimerge %>% 
+       filter(VISCODE=="bl"), summarytools::ctable(DX.bl, DX))
+```
+
+
+```{r}
+# DX.bl == AD will sometimes lead to DX == MCI rather then Dementia
+with(adnimerge, summarytools::ctable(DX.bl, DX))
+```
+
+
+```{r}
+# Further investigate
+# Participant 162, 167, 739, 4641, 4845
+adnimerge %>%
+  filter(DX.bl == "AD", DX == "MCI") %>%
+  select(RID, EXAMDATE, M, DX.bl, DX)
+```
+
+
+```{r}
+# Reversion seems to be rare but possible according to ADNI slide?
+adnimerge %>%
+  filter(RID %in% c(162, 167, 739, 4641, 4845)) %>%
+  select(RID, EXAMDATE, M, DX.bl, DX) %>%
+  ggplot() + 
+    geom_point(aes(M, DX, color = DX)) + 
+    labs(title = "PTs with AD at baseline but with MCI instead of Dementia at follow up",
+         caption = "Baseline refers to DX.bl, follow up refers to DX",
+         x = "Month since baseline") + 
+    facet_wrap(vars(RID)) + 
+    theme(legend.position = "top")
+```
+
+# Check dropout 
+
+```{r}
+# Early Discontinuation and Withdrawal
+#ADNIMERGE::treatdis %>% head() %>% View()
+
+ADNIMERGE::treatdis %>% 
+  filter(RID %in% df.surv_preds$RID) %>% 
+  select(WDREASON) %>% 
+  table()
+```
+
+
+```{r}
+(df.surv_preds$RID %in% ADNIMERGE::treatdis$RID) %>% 
+  mean() # Not all subjects in cleaned data found in Early Discontinuation and Withdrawal
+# Likely reason: not drop out yet? new RIDs not included => up to ADNI2
+
+ADNIMERGE::treatdis %>% 
+  filter(RID %in% df.surv_preds$RID) %>% 
+  nrow() # Check n size
+
+# Count death frequency
+sapply(
+  ADNIMERGE::treatdis %>% 
+    filter(RID %in% df.surv_preds$RID) %>% 
+    select(WDREASON), 
+  function(reason){
+   grepl("Death", reason)
+  }) %>% sum()
+```
+
+
