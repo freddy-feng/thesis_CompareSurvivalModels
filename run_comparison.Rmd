@@ -1,0 +1,293 @@
+---
+title: "comparison"
+author: "Yibin Feng"
+date: '2022-06-15'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(tidyverse)
+
+source("function_utility_exp.R")
+source("function_evaluation.R")
+
+
+```
+
+
+
+
+# Comparison
+
+```{r}
+# Load path to eval results
+
+#models.path <- list.files(path = "./output/cheat/") # Using all repeated measurements up to event
+# Note the cheat results suffer from minor coding problems, need to rerun or simply ignore them!
+
+folderpath <- "./output/exp2_repCV_lm0vslm2/"
+models.path <- list.files(path = folderpath) # Using repeated measurements up to landmark time
+models.path <- models.path[grepl(pattern = "eval_", x = models.path)] # Only include evaluations, not other outputs
+models.path <- models.path[grepl(pattern = "lm2", x = models.path) | grepl(pattern = "lm0", x = models.path)] # Only include landmark 4 
+models.name <- stringr::str_remove_all(stringr::str_remove_all(models.path, ".RData"), "eval_")
+
+models.name
+```
+
+
+# Present result - tdAUC
+```{r, fig.width=8, fig.height=4}
+# ------------------------------------------------------------------------------------------------
+# Summarize tdAUC results
+# ------------------------------------------------------------------------------------------------
+
+# Initialize
+df.tdauc.compare <- data.frame()
+T.start <- 2
+deltaT <- 1:15
+deltaT <- deltaT[deltaT > T.start]
+# ------------------------------------------------------------------------------------------------
+
+# Repeat the following steps for different models
+
+for (i in 1:length(models.name)) {
+  
+  if (i == 1) {
+    # Result 1
+    df.tdauc <- Summarize.tdAUC(
+      model = models.name[i], 
+      path = paste0(folderpath, models.path[i]), 
+      n_fold = n_fold, 
+      detlaT = deltaT
+      )
+    
+    df.tdauc.compare <- df.tdauc
+  }
+
+  # Result i, i > 1
+  df.tdauc <- Summarize.tdAUC(
+    model = models.name[i], 
+    path = paste0(folderpath, models.path[i]), 
+    n_fold = n_fold, 
+    detlaT = deltaT
+    )
+  
+  # Combine results from other models to compare dataframe
+  df.tdauc.compare <- df.tdauc.compare %>%
+    add_row(df.tdauc)
+}
+
+
+# Add method column
+df.tdauc.compare$scenario <- stringr::str_split(df.tdauc.compare$model, pattern = "_", simplify = TRUE)[, 1]
+df.tdauc.compare$method <- stringr::str_split(df.tdauc.compare$model, pattern = "_", simplify = TRUE)[, 2]
+df.tdauc.compare$landmark <- stringr::str_split(df.tdauc.compare$model, pattern = "_", simplify = TRUE)[, 3]
+
+```
+
+Plot tdAUC for all
+```{r, fig.width=8, fig.height=4}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+#  filter(landmark == "lm0") %>%
+  filter(method == "pCox") %>%
+  filter(scenario == "scenario2") %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model)
+  ) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+  geom_point(aes(shape = method, color = landmark), alpha = 0.8) +
+  geom_line(aes(linetype = method, color = landmark), size = 0.5, alpha = 0.8) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.7, 1)) +
+  xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
+  )  +
+  theme_minimal()
+  
+```
+
+
+
+Plot tdAUC for scenario 1 or 2 separately:
+```{r}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  filter(grepl(model, pattern = "scenario1")) %>% # Comment out to show all
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model,
+    color = model)) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+    geom_point() +
+    geom_line(aes(linetype = method), size = 1, alpha = 0.3) +
+    scale_x_continuous(breaks = deltaT) + 
+    scale_y_continuous(breaks = 0:10 / 10) +
+    coord_cartesian(ylim = c(0.5, 1)) +
+    xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+    labs(
+      title = "Comparison of estimated tdAUC under 10-fold CV",
+      subtitle = paste("at landmark time", T.start),
+      caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
+    )  +
+    theme_minimal()
+
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  filter(grepl(model, pattern = "scenario2")) %>% # Comment out to show all
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model,
+    color = model)
+  ) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+  geom_point() +
+  geom_line(aes(linetype = method), size = 1, alpha = 0.3) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.5, 1)) +
+  xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
+  )  +
+  theme_minimal()
+```
+
+Plot scaled and MFPCCox only:
+```{r, fig.width=8}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  filter(grepl(model, pattern = "scaled")) %>% # Comment out to show all
+  filter(grepl(model, pattern = "pve")) %>% # Comment out to show all
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model,
+    color = model)
+  ) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+  geom_point() +
+  geom_line(aes(linetype = scenario), size = 1, alpha = 0.3) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.5, 1)) +
+  xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
+  )  +
+  theme_minimal()
+```
+
+
+# C index 
+
+```{r, fig.width=8}
+# ------------------------------------------------------------------------------------------------
+# Summarize C-index results
+# ------------------------------------------------------------------------------------------------
+
+# Initialize
+df.c.index.compare <- data.frame()
+# ------------------------------------------------------------------------------------------------
+
+for (i in 1:length(models.name)) {
+  
+  if (i == 1) {
+    # Result 1
+    df.c.index <- Summarize.c.index(
+      model = models.name[i], 
+      path = paste0(folderpath, models.path[i]), 
+      n_fold = n_fold
+      )
+    
+    df.c.index.compare <- df.c.index
+  }
+
+  # Result i, i > 1
+  df.c.index <- Summarize.c.index(
+    model = models.name[i], 
+    path = paste0(folderpath, models.path[i]), 
+    n_fold = n_fold
+    )
+  
+  # Combine results from other models to compare dataframe
+  df.c.index.compare <- df.c.index.compare %>%
+    add_row(df.c.index)
+}
+
+# Add method column
+df.c.index.compare$method <- stringr::str_split(df.c.index.compare$model, pattern = "_", simplify = TRUE)[, 2]
+
+
+```
+
+```{r, fig.width=8}
+# ------------------------------------------------------------------------------------------------
+# Plot df.c.index.compare
+# ------------------------------------------------------------------------------------------------
+df.c.index.compare %>%
+  filter(grepl(model, pattern = "scaled")) %>% # Comment out to show all
+  filter(grepl(model, pattern = "scenario2")) %>%
+  ggplot(aes(x = model, y = c.index, fill = model)) + 
+    geom_point(
+      aes(color = model),
+      position = position_jitter(seed = 1, width = 0.2),
+      alpha = 0.8) +
+    geom_violin(width = 0.5, alpha = 0.2) + 
+    geom_boxplot(width = 0.1, alpha = 0.2) + 
+    coord_cartesian(ylim = c(0.8, 1)) +
+    xlab("") + ylab("C-index") +
+    labs(
+      title = "Comparison of estimated C-index under single 10-fold CV",
+      ) + 
+    theme_minimal() +
+    theme(
+      axis.ticks.x = element_blank(),
+      axis.text.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank()
+    )
+```
+

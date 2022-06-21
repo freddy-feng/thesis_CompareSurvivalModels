@@ -4,7 +4,7 @@
 require(glmnet)
 require(survival)
 # ------------------------------------------------------------------------------------------------
-# Impute missing values in baseline covariates (numeric only) with mean values
+# Impute missing values in baseline covariates (for numeric only) with mean values
 # ------------------------------------------------------------------------------------------------
 Imputate.x.mean <- function(x.covs, verbose = FALSE) {
   # Function to fill missing values with mean values
@@ -97,14 +97,16 @@ Train_glmnet <- function(
   
   if (scenario == "scenario1" | scenario == "scenario2") {
     covs.pcox <- c(baseline.covs, baseline.covs.additional)
+  } else if (scenario == "scenario0") {
+    covs.pcox <- c(baseline.covs)
   } else {
     stop("undefined scenario!")
   }
   
   # Select covariates
   training.x.covs <- training.surv %>%
-    select(covs.pcox)
-  # Imputation
+    select(all_of(covs.pcox))
+  # Imputation using train set values
   training.x.covs.imputed <- Imputate.x.mean(training.x.covs)
   
   # Model matrix, of dimension n obs x n vars; each row is an observation vector

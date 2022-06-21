@@ -3,7 +3,7 @@
 # ------------------------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------------------------
-# Manual cleaning to avoid double entry problem in data
+# [superseded] Manual cleaning to avoid double entry problem in data
 # ------------------------------------------------------------------------------------------------
 Remove_invalid_long_data <- function(long) {
   checkcond <- any(training.long[training.long$id %in% 6014, "VISCODE"] == "m0")
@@ -57,7 +57,8 @@ Train_MFPCCox <- function(
     subject.id,
     y.names,
     argvals,
-    pve
+    pve,
+    nbasis
     ) {
   # -----------------------------------------------------------------------------------  
   # MFPCCpx - Get multivar array
@@ -67,9 +68,9 @@ Train_MFPCCox <- function(
 
   n.y <- length(y.names)
   # -----------------------------------------------------------------------------------
-  # MFPCCpx Step 1 - Apply univariate FPCA using PACE algorithm
+  # MFPCCox Step 1 - Apply univariate FPCA using PACE algorithm
   # -----------------------------------------------------------------------------------
-  print("Step 1 univariate FPCA")
+  print("Step 1 - univariate FPCA")
   t.start <- Sys.time()
   
   # Initialize variables
@@ -77,6 +78,7 @@ Train_MFPCCox <- function(
   L <- NULL
   phi.train <- NULL # phi = eigenfunctions
   meanFun.train <- NULL # meanFun = mean function
+  npc.train <- NULL
   
   for(p in 1:n.y) { # for each long covariate
     print(paste("Apply uFPCA to", y.names[p])) # Uncomment to debug
@@ -86,7 +88,7 @@ Train_MFPCCox <- function(
       testData = multivar.train[, , p], 
       domain = argvals, # scaled obstime in [0,1]
       pve = pve,
-      nbasis = 3) 
+      nbasis = nbasis) 
     # nbasis: representing the number of B-spline basis functions used for estimation of the mean function and bivariate smoothing of the covariance surface. Defaults to 10
     
     # Detail about output from uPACE refer to doc of MFPCA library
@@ -95,14 +97,16 @@ Train_MFPCCox <- function(
     # ?"@" Extract or replace the contents of a slot in a object with a formal (S4) class structure.
     phi.train[[p]] <- t(tmp.ufpca$functions@X) # estimated functional principal components (eigenfunctions)
     meanFun.train[[p]] <- tmp.ufpca$mu@X # mean functions
+    npc.train[[p]] <- tmp.ufpca$npc
   }
   
   t.end <- Sys.time()
   t.step1 <- as.numeric(difftime(t.end, t.start, units = "mins"))
+  
   # -----------------------------------------------------------------------------------
   # MFPCCpx Step 2 - Apply multivariate FPCA on uFPCA outputs
   # -----------------------------------------------------------------------------------
-  print("Step 2 MFPCA")
+  print("Step 2 - MFPCA")
   t.start <- Sys.time()
   
   mFPCA.train <- mFPCA(
@@ -123,7 +127,7 @@ Train_MFPCCox <- function(
   # -----------------------------------------------------------------------------------
   # MFPCCpx Step 3 - Fit Cox model
   # -----------------------------------------------------------------------------------
-  print("Step 3 Cox")
+  print("Step 3 - Cox model")
   t.start <- Sys.time()
   
   # Extract scores
@@ -136,7 +140,6 @@ Train_MFPCCox <- function(
   rhs <- paste(c(basecov.names, rho.names), collapse = "+")
   formula <- as.formula(paste(lhs, "~", rhs))
   
-  print("Fitting Cox model")
   mfpccox <- coxph(
     formula, 
     data = training.surv.rho,
@@ -145,10 +148,11 @@ Train_MFPCCox <- function(
   t.end <- Sys.time()
   t.step3 <- as.numeric(difftime(t.end, t.start, units = "mins"))
   
-  return(list(
+  return (list(
     mfpccox = mfpccox,
-    mfpca = mFPCA.train,
-    y.names = y.names,
+    mfpca.train = mFPCA.train,
+    phi.train = phi.train,
+    npc.train = npc.train,
     runtimes = list(
       step1 = t.step1,
       step2 = t.step2,

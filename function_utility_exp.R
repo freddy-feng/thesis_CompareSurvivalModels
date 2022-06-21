@@ -3,13 +3,17 @@
 # ------------------------------------------------------------------------------------------------
 #
 require(tidyverse)
+require(foreach)
+require(ggpubr)
 
 Initialize_exp <- function(
-    data.surv, data.long, 
+    data.surv,
+    data.long,
+    baseline.covs, 
+    vars_ignore,
     set_scenario,
-    n_fold, seed) {
-  
-  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4")
+    n_fold, 
+    seed) {
   
   # -----------------------------------------------------------------------------------
   # Prepare candidate longitudinal covariates
@@ -21,26 +25,27 @@ Initialize_exp <- function(
   vars_literature <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
   # This is a subset of longitudinal covariates chosen according to previous literature
   
-  # Manual exclusion ----------------------------------------------------------------------------------------
-  # Type of TAU, PTAU and ABETA are character, need to handle non-numerical values first. currently excluded
-  vars_manual_remove <- c("TAU", "PTAU", "ABETA")
-  
-  # Exclude irrelevant variables
-  vars_irrelevant <- c(
-    names(data.long)[grepl(".bl", names(data.long))], # Exclude baselines, Years.bl, Month.bl
-    "RID", "time", "event", "status", "DX",
-    "VISCODE", "EXAMDATE", "Y", "M", "Month",
-    "AGE", "age.fup", "COLPROT", "ORIGPROT", "PTID", "SITE",
-    "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4",
-    "FSVERSION", "IMAGEUID", "FLDSTRENG"
-  )
-  # -----------------------------------------------------------------------------------
+  # # Manual exclusion ----------------------------------------------------------------------------------------
+  # # Type of TAU, PTAU and ABETA are character, need to handle non-numerical values first. currently excluded
+  # vars_manual_remove <- c("TAU", "PTAU", "ABETA")
+  # 
+  # # Exclude irrelevant variables
+  # vars_irrelevant <- c(
+  #   names(data.long)[grepl(".bl", names(data.long))], # Exclude baselines, Years.bl, Month.bl
+  #   "RID", "time", "event", "status", "DX",
+  #   "VISCODE", "EXAMDATE", "Y", "M", "Month",
+  #   "AGE", "age.fup", "COLPROT", "ORIGPROT", "PTID", "SITE",
+  #   "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4",
+  #   "FSVERSION", "IMAGEUID", "FLDSTRENG"
+  # )
+  # # -----------------------------------------------------------------------------------
   
   ## Filter candidate longitudinal covariates automatically based on missingness criteria
   
   missing_proportions <- Compute_missing_proportions(
     data.long = data.long,
-    vars_ignore = c(vars_irrelevant, vars_manual_remove)
+    vars_filter = vars_ignore, 
+    is_include = FALSE
   )
   # -----------------------------------------------------------------------------------
   
@@ -62,8 +67,7 @@ Initialize_exp <- function(
   # Compute union of all variables to be excluded in LMMs
   vars_exclude <- Reduce(
     union, list("id", 
-                vars_manual_remove, 
-                vars_irrelevant,
+                vars_ignore,
                 vars_missing))
   
   vars_candidate <- names(data.long)[!(names(data.long) %in% vars_exclude)] %>%
@@ -107,8 +111,7 @@ Initialize_exp <- function(
   # folds is a list containing fitted models and train test ids
   # initialize folds here empty list of n_fold size
   # also contains the ids.test to ensure same subset of subjects are used for training and testing
-  folds <- create_folds(data.surv, n_fold, seed)
-  #check_folds(data.surv, folds)
+  folds <- Create_folds(data.surv, n_fold, seed)
   
   # -----------------------------------------------------------------------------------
   # Prepare scaling table and store experiment parameters
@@ -146,7 +149,7 @@ Initialize_exp <- function(
       filter(id %in% training.surv$id)
     # -----------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------
-    # Construct scaling table using training data
+    # Construct scaling table using TRAINING data
     scaling_table <- Compute_scaling_table(training.long, vars_scale)
     # -----------------------------------------------------------------------------------
     
@@ -174,7 +177,7 @@ Initialize_exp <- function(
 # Generate fold ids for train-test split
 # ------------------------------------------------------------------------------------------------
 
-create_folds <- function(surv, n_fold, seed) {
+Create_folds <- function(surv, n_fold, seed) {
   
   set.seed(seed)
   
@@ -184,7 +187,7 @@ create_folds <- function(surv, n_fold, seed) {
   
   ids.remaining <- as.numeric(surv$id) # Initialize
   for (i in 1:n_fold) {
-    j <- n_fold - (i - 1)
+    j <- n_fold - (i - 1) # Count down
     if (j > 1) { # Not last fold
       tmp <- surv %>%
         filter(id %in% ids.remaining) %>% # Excluded subjects from other split
@@ -197,81 +200,68 @@ create_folds <- function(surv, n_fold, seed) {
     } else { # Last fold
       folds[[i]]$ids.test <- ids.remaining
     }
+    folds[[i]]$seed <- seed
   }
   
   return (folds)
 }
-
-# Check fold
-check_folds <- function (surv, folds) {
+# ------------------------------------------------------------------------------------------------
+# Check results from train-test split
+# ------------------------------------------------------------------------------------------------
+Check_folds <- function (surv, folds) {
   print("--------------------------------------------------------------------------------")
   print("Check stratification by events in test set for each fold:")
+  print("--------------------------------------------------------------------------------")
   for (i in 1:length(folds)) {
-    print(paste("Fold", i))
-    ids.test <- folds[[i]]$ids.test 
+    print("--------------------------------------------------------------------------------")
+    print(paste("Checking frequency in fold", i))
+    print("--------------------------------------------------------------------------------")
+    ids.test <- folds[[i]]$ids.test
+    ## -------------------------------------------------------
     events.test <- surv %>% 
       filter(id %in% ids.test) %>%
       select(event)
-    print("Event frequency:")
-    print(events.test %>%
-            table())
-    print("Event proportion:")
-    print(events.test %>%
-            table() %>%
-            prop.table() %>%
-            round(digits = 3))
-    print("--------------------")
+    
+    df.freq.test <- data.frame(events.test %>% table()) %>% 
+      mutate(Ratio = Freq / sum(Freq))
+    
+    colnames(df.freq.test) <- c("Event", "Frequency", "Ratio")
+    
+    print("Test set")
+    print(as.matrix(df.freq.test))
+    ## -------------------------------------------------------
+    events.train <- surv %>%
+      filter(!(id %in% ids.test)) %>% # Complement of test set
+      select(event)
+    
+    df.freq.train <- data.frame(events.train %>% table()) %>% 
+      mutate(Ratio = Freq / sum(Freq))
+    
+    colnames(df.freq.train) <- c("Event", "Frequency", "Ratio")
+    
+    print("Train set")
+    print(as.matrix(df.freq.train))
+    print("--------------------------------------------------------------------------------")
   }
   print("--------------------------------------------------------------------------------")
 }
 # ------------------------------------------------------------------------------------------------
-#
-# ------------------------------------------------------------------------------------------------
-# Summarize tdAUC in different folds from folds.eval and output dataframe
-# ------------------------------------------------------------------------------------------------
-Summarize.tdAUC <- function(model, path, n_fold, detlaT) {
-  # Load results to folds.eval list for corresponding model
-  load(path)
-  
-  # Extract from folds.eval into list of tdAUC
-  list.tdauc <- lapply(1:n_fold, function(i) {
-    folds.eval[[i]]$perf$tdauc
-  })
-  
-  # Convert list into data frame
-  df.tdauc <- data.frame(do.call(rbind, list.tdauc)) # row i = fold i
-  colnames(df.tdauc) <- deltaT
-  
-  # Compute statistics
-  df.tdauc <- df.tdauc %>%
-    pivot_longer(
-      cols = everything(),
-      names_to = "prediction_time",
-      values_to = "tdAUC"
-    ) %>%
-    group_by(prediction_time) %>%
-    summarise(
-      mean = mean(tdAUC),
-      ci.upper = quantile(tdAUC, 0.975),
-      ci.lower = quantile(tdAUC, 0.025)
-    ) 
-  
-  
-  df.tdauc$prediction_time <- as.numeric(df.tdauc$prediction_time)
-  df.tdauc <- df.tdauc %>% arrange(prediction_time)
-  df.tdauc$model <- model
-  
-  return(df.tdauc)
-}
-# ------------------------------------------------------------------------------------------------
-#
+
 # ------------------------------------------------------------------------------------------------
 # Return a table of missing proportions on subjects without any observations per longitudinal covariate
 # ------------------------------------------------------------------------------------------------
 # Smaller is better, proportion_y_missing = 0 implies all subjects have at least one measurement
-Compute_missing_proportions <- function(data.long, vars_ignore) {
+Compute_missing_proportions <- function(data.long, vars_filter, is_include = FALSE) {
+  
+  if (is_include == TRUE) { # Include vars supplied by vars_filter
+    data.long <- data.long %>%
+      select(all_of(vars_filter))
+  } else if (is_include == FALSE) { # Default is to supply the vars to ignore for filtering
+    data.long <- data.long %>%
+      select(-all_of(vars_filter))
+  }
+  
   missing_proportions <- data.long %>%
-    select(-all_of(vars_ignore)) %>% # Exclude manual exclusion defined above
     group_by(id) %>%
     dplyr::summarise(across(everything(), 
                             function(x) all(is.na(x)))) %>% # Within subject, all y is missing
@@ -282,6 +272,22 @@ Compute_missing_proportions <- function(data.long, vars_ignore) {
                  names_to = "var_name",
                  values_to = "proportion_y_missing") %>%
     arrange(proportion_y_missing)
+  
+  # Count repeated observations per covariate
+  obs_counts <- data.long %>%
+    group_by(id) %>%
+    dplyr::summarise(across(everything(), 
+                            function(x) sum(!is.na(x)))) %>% # Within subject, non-NA value
+    dplyr::select(-id) %>% # Drop id
+    dplyr::summarise(across(everything(),
+                            function(x) mean(x))) %>% # Proportion of subjects without any y values
+    pivot_longer(cols = everything(), 
+                 names_to = "var_name",
+                 values_to = "avg_obs_per_subject")
+  
+  missing_proportions <- missing_proportions %>%
+    left_join(obs_counts, by = "var_name")
+  
   return(missing_proportions)
 }
 # ------------------------------------------------------------------------------------------------
@@ -336,9 +342,13 @@ Compute_scaling_table <- function(data, vars_scale) {
 # Return a list of train and test data
 # ------------------------------------------------------------------------------------------------
 Get_train_test_data <- function(
-    data.surv, data.long, ids.test,
-    is_scaled, scaling_table
+    data.surv, # Full surv data 
+    data.long, # Full long data
+    ids.test, # Subject ids for test set
+    is_scaled, # Set to "scaled" to scale numeric covariates
+    scaling_table # Scaling parameters derived from training data
     ) {
+  
   ## Test set
   testing.surv <- data.surv %>% 
     filter(id %in% ids.test)
@@ -362,6 +372,7 @@ Get_train_test_data <- function(
     testing.surv <- Scale_covariates(testing.surv, scaling_table)
     testing.long <- Scale_covariates(testing.long, scaling_table)
   }
+  
   return(list(
     training.surv = training.surv,
     training.long = training.long,
@@ -371,4 +382,201 @@ Get_train_test_data <- function(
 }
 # ------------------------------------------------------------------------------------------------
 
+# ------------------------------------------------------------------------------------------------
+# Apply transformation to longitudinal data
+# ------------------------------------------------------------------------------------------------
+Transform_covariates <- function(
+    data.long,
+    y.names, # Vars to transform 
+    threshold.skew, 
+    threshold.sym) {
+  
+  # Compute statistics for original data
+  y.stats <- foreach(var_name = y.names, .combine = rbind) %do% {
+    c(skewness(data.long[, var_name], na.rm = TRUE), fivenum(data.long[, var_name], na.rm = TRUE))
+  } %>% 
+    data.frame(row.names = NULL)
+  
+  colnames(y.stats) <- c("skewness", "minimum", "lower_hinge", "median", "upper_hinge", "maximum")
+  y.stats$var_name <- y.names
+  
+  y.stats <- y.stats %>% 
+    mutate(symmetry = (upper_hinge - median) / (median - lower_hinge)) %>%
+    select(var_name, skewness, symmetry, everything())
+  # Note: Symmetry ratio constructed according to Sec 4.2, Fox, Applied Regression Analysis and Generalised Linear Models
+  
+  # If variable contains value <= 0, add a positive constant `start` before power transformation
+  # To ensure that the power transformation will be monotone i.e. preserve order after transformation
+  # To ensure log transformation has defined input domain
+  y.stats <- y.stats %>% 
+    mutate(is_neg = minimum < 0,
+           start = -floor(minimum),
+           is_sym_over = symmetry > 1 + threshold.sym,
+           is_sym_under = symmetry < 1 - threshold.sym,
+           is_skew_pos = skewness > 0 + threshold.skew,
+           is_skew_neg = skewness < 0 - threshold.skew
+    ) %>%
+    select(var_name, is_neg, start, is_sym_over, is_sym_under, is_skew_pos, is_skew_neg, everything())
+  
 
+  # Transformation
+
+  data.long.transformed <- data.long # Copy original data
+  
+  vec.transformation <- vector(mode = "character", length = length(y.names))
+  
+  for (i in 1:length(y.names)) {
+    
+    var_name <- y.names[i]
+    #  var_name <- "ADAS11" # Debug
+    
+    y.raw <- data.long[, var_name]
+    y.stats_extract <- y.stats[y.stats$var_name == var_name, ]
+    transformation <- var_name # String to describe the transformation
+    
+    raw.skew <- y.stats_extract$skewness
+    raw.min <- y.stats_extract$minimum
+    raw.sym <- y.stats_extract$symmetry
+    
+    
+    # Add a positive constant if y <= 0 before transformation
+    if (raw.min < 0) {
+      start <- y.stats_extract$start
+      y.raw <- y.raw + start
+      transformation <- paste0(transformation, "+", as.character(start))
+    } else if (raw.min == 0) {
+      start <- 1
+      y.raw <- y.raw + start
+      transformation <- paste0(transformation, "+", as.character(start))
+    }
+    
+    # Transform covariate
+    if (raw.skew > threshold.skew) { # Positive skew
+      y.transformed <- log10(y.raw) # Down the ladder
+      transformation <- paste0("log10(", transformation, ")")
+    } else if (raw.skew < -threshold.skew) { # Negative skew
+      y.transformed <- y.raw^3 # Up the ladder
+      transformation <- paste0("(", transformation, ")^3")
+    } else { # Within threshold
+      y.transformed <- y.raw # Keep original
+      transformation <- NA
+    }
+    # Store the transformed data
+    data.long.transformed[, var_name] <- y.transformed
+    vec.transformation[i] <- transformation
+  }
+  
+  
+  # Recalculate the statistics after transformation
+  y.stats.transformed <- foreach(var_name = y.names, .combine = rbind) %do% {
+    c(skewness(data.long.transformed[, var_name], na.rm = TRUE), fivenum(data.long.transformed[, var_name], na.rm = TRUE))
+  } %>% 
+    data.frame(row.names = NULL)
+  
+  colnames(y.stats.transformed) <- c("skewness_t", "minimum_t", "lower_hinge_t", "median_t", "upper_hinge_t", "maximum_t")
+  y.stats.transformed$var_name <- y.names
+  
+  y.stats.transformed <- y.stats.transformed %>% 
+    mutate(symmetry_t = (upper_hinge_t - median_t) / (median_t - lower_hinge_t)) %>%
+    select(var_name, skewness_t, symmetry_t, everything())
+  
+  y.stats.transformed <- y.stats.transformed %>%
+    left_join(y.stats, by = "var_name")
+  
+  y.stats.transformed$transformation <- vec.transformation
+  
+  # Organize columns
+  y.stats.transformed <- y.stats.transformed %>%
+    select(var_name, transformation, everything())
+  
+  return(list(
+    data.long.transformed = data.long.transformed,
+    summary = y.stats.transformed
+  ))
+}
+
+# ------------------------------------------------------------------------------------------------
+# Plot to compare transformation
+# Ouput: Save figures to ./output/
+# ------------------------------------------------------------------------------------------------
+Plot_transformation <- function(
+    data.long,
+    data.long.transformed,
+    y.stats.transformed) {
+  
+  y.names <- y.stats.transformed$var_name
+  
+  for (var_name in y.names) {
+    
+    stats_extract <- y.stats.transformed[y.stats.transformed$var_name == var_name, ]
+    
+    if (!is.na(stats_extract$transformation)) { # If transformation took place
+      
+      # Extract data
+      y.raw <- data.long[, var_name]
+      y.transformed <- data.long.transformed[, var_name]
+      
+      # Extract stats
+      raw.min <- stats_extract$minimum
+      raw.skew <- stats_extract$skewness
+      raw.sym <- stats_extract$symmetry
+      
+      transformed.min <- stats_extract$minimum_t
+      transformed.skew <- stats_extract$skewness_t
+      transformed.sym <- stats_extract$symmetry_t
+      
+      # Compare
+      g.raw <- ggplot(data = data.frame(y.raw)) + 
+        geom_histogram(aes(y.raw), na.rm = TRUE, bins = 50) +
+        geom_vline(xintercept = raw.min, color = "blue") + # Minimum
+        xlab(var_name) +
+        labs(
+          title = paste(var_name, "(before transform)"),
+          subtitle = paste("skew:", round(raw.skew, 2), "sym:", round(raw.sym, 2))
+        )  
+      
+      g.transformed <- ggplot(data = data.frame(y.transformed)) + 
+        geom_histogram(aes(y.transformed), na.rm = TRUE, bins = 50) +
+        geom_vline(xintercept = transformed.min, color = "blue") + # Minimum
+        xlab(stats_extract$transformation) +
+        labs(
+          title = paste(var_name, "(after transform)"),
+          subtitle = paste("skew:", round(transformed.skew, 2), "sym:", round(transformed.sym, 2))
+        )
+      
+      # Combine plots and save
+      g <- ggarrange(plotlist = list(g.raw, g.transformed))
+      fn <- paste0("output_transf_hist_", var_name, ".png")
+      ggsave(filename = fn, plot = g, path = "./output/", width = 8, height = 4)
+    }
+  }
+}
+# ------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+# Update the surv data according to landmark time
+# Change the time-varying variables in data.surv
+# ------------------------------------------------------------------------------------------------
+Get_last_nonNA <- function(x) {
+  if (all(is.na(x))) {
+    NA
+  } else {
+    tail(x[!is.na(x)], 1)
+  }
+}
+
+Update_surv_at_landmark <- function(surv, long, y.names) {
+  
+  surv.mod <- surv %>%
+    select(-all_of(y.names))
+  
+  df.last_nonNA <- long %>% 
+    group_by(id) %>%
+    summarise(across(.cols = y.names, .fns = Get_last_nonNA))
+
+  surv.mod <- surv.mod %>%
+    left_join(df.last_nonNA, by = "id") %>%
+    select(names(surv))
+  
+  return(surv.mod)
+}
+# ------------------------------------------------------------------------------------------------

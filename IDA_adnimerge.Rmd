@@ -513,25 +513,24 @@ adnimerge %>%
 #ADNIMERGE::treatdis %>% head() %>% View()
 
 ADNIMERGE::treatdis %>% 
-  filter(RID %in% df.surv_preds$RID) %>% 
+#  filter(RID %in% df.surv_preds$RID) %>%
   select(WDREASON) %>% 
   table()
 ```
 
 
 ```{r}
-(df.surv_preds$RID %in% ADNIMERGE::treatdis$RID) %>% 
-  mean() # Not all subjects in cleaned data found in Early Discontinuation and Withdrawal
+# Not all subjects in cleaned data found in Early Discontinuation and Withdrawal
 # Likely reason: not drop out yet? new RIDs not included => up to ADNI2
 
 ADNIMERGE::treatdis %>% 
-  filter(RID %in% df.surv_preds$RID) %>% 
+#  filter(RID %in% df.surv_preds$RID) %>% 
   nrow() # Check n size
 
 # Count death frequency
 sapply(
   ADNIMERGE::treatdis %>% 
-    filter(RID %in% df.surv_preds$RID) %>% 
+#    filter(RID %in% df.surv_preds$RID) %>% 
     select(WDREASON), 
   function(reason){
    grepl("Death", reason)

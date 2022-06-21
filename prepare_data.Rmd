@@ -289,7 +289,7 @@ df.long_censored <- df.long %>%
   filter(time > Years.bl)
 ```
 
-### Copy `RID` to `id` to comply with `pencal` naming convention
+### Copy `RID` to `id` to comply with `pencal` naming convention and organization
 
 ```{r}
 df.surv_preds$id <- df.surv_preds$RID
@@ -298,6 +298,10 @@ df.long_censored$id <- df.long_censored$RID
 # Reorganize column order
 df.surv_preds <- df.surv_preds %>% select(id, time, event, status, status.bl, everything())
 df.long_censored <- df.long_censored %>% select(id, everything())
+
+# Arrange in ascending order by id and id, age.fup
+df.surv_preds <- df.surv_preds %>% arrange(id)
+df.long_censored <- df.long_censored %>% arrange(id, age.fup)
 ```
 
 # Save prepared datasets

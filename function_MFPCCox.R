@@ -23,7 +23,7 @@ require(refund)
 require(MFPCA)
 
 
-
+################################################################################################################
 # simulation data for multivariate joint model linear 
 sim_mjm_linear = function(I, J=8,  obstime = c(0,3,6,9,12,15, 18,21), miss = FALSE, miss.rate = 0.1){
   
@@ -257,10 +257,10 @@ sim_mjm_nonlinear = function(I, J=8,  obstime = c(0,3,6,9,12,15, 18,21), miss = 
   
   return(list(long=long, surv=surv, long.all=long.all))
 }
-
+################################################################################################################
 
 # univariate FPCA via principal analysis by conditional estimation(PACE)
-uPACE = function(testData, domain, predData=NULL, nbasis = 10, pve = 0.95, npc = NULL) {
+uPACE = function(testData, domain, predData = NULL, nbasis = 10, pve = 0.95, npc = NULL) {
   
   tmp = funData(domain, testData)
   if(is.null(predData)){
@@ -269,9 +269,10 @@ uPACE = function(testData, domain, predData=NULL, nbasis = 10, pve = 0.95, npc =
     tmp2 = funData(domain, predData)
   }
   
-  res = PACE(tmp, tmp2, pve=pve, npc= npc, nbasis=nbasis)
+  res = PACE(tmp, tmp2, pve = pve, npc = npc, nbasis=nbasis)
+  
   return(res)
-} 
+}
 
 # multivariate FPCA based on results from uPACE
 mFPCA = function(Xi, phi, p , L, I){
@@ -331,7 +332,6 @@ mfpca.pred = function(score, meanf, psi, n.rho=NULL){
   out = pred
   return(out)
 }
-
 
 #risk predict
 cond.prob = function(model, newdata, Tstart, Tpred){

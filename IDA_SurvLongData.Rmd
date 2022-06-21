@@ -19,17 +19,28 @@ library(tidyverse)
 library(ggpubr)
 library(ggfortify)
 
+library(moments)
+
+library(foreach)
+
 library(survival)
 library(survminer)
 
 library(Hmisc)
-library(ADNIMERGE)
+#library(ADNIMERGE)
+
+source("function_utility_exp.R") # Utility functions
 ```
 
 # Import data
 
+Set the surv and long data for IDA in the chunk below:
+
 ```{r}
 load("adni_cleaned_prc.RData")
+
+df.surv_preds <- df.surv_preds_prc
+df.long <- df.long_censored_prc
 ```
 
 
@@ -88,6 +99,58 @@ df.surv_preds %>%
 
 
 ### NAs in repeated measurement
+
+#### Number of candidate long covariates
+```{r}
+# Obtain long covariates
+# Manual exclusion ----------------------------------------------------------------------------------------
+# Type of TAU, PTAU and ABETA are character, need to handle non-numerical values first. currently excluded
+vars_manual_remove <- c("TAU", "PTAU", "ABETA")
+
+# Exclude irrelevant variables
+vars_irrelevant <- c(
+  names(data.long)[grepl(".bl", names(data.long))], # Exclude baselines, Years.bl, Month.bl
+  "RID", "time", "event", "status", "DX",
+  "VISCODE", "EXAMDATE", "Y", "M", "Month",
+  "AGE", "age.fup", "COLPROT", "ORIGPROT", "PTID", "SITE",
+  "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4",
+  "FSVERSION", "IMAGEUID", "FLDSTRENG"
+)
+
+y.names <- names(data.long)[!(names(data.long) %in% c("id", vars_manual_remove, vars_irrelevant))]
+
+# ----------------------------------------------------------------------------------------
+
+
+
+missing_proportions_all <- Compute_missing_proportions(
+  data.long = df.long, 
+  vars_filter = c(vars_irrelevant, vars_manual_remove),
+  is_include = FALSE # Set FALSE to exclude vars_filter
+)
+
+# Recalculate the missing proportions when landmark at year 2
+missing_proportions_yr2 <- Compute_missing_proportions(
+  data.long = df.long %>% filter(Years.bl <= 2), 
+  vars_filter = c(vars_irrelevant, vars_manual_remove),
+  is_include = FALSE # Set FALSE to exclude vars_filter
+)
+
+missing_proportions_compare <- missing_proportions_all %>%
+  left_join(missing_proportions_yr2, by = "var_name", suffix = c("_all", "_yr2")) %>%
+  mutate(diff = proportion_y_missing_yr2 - proportion_y_missing_all)
+
+
+missing_proportions_compare %>%
+  mutate(round(across(-var_name), digits = 3))
+# This comparison shows that selecting landmark at 2 does not affect the pool of candidate long covariates
+# When we set the cut-off to 0.1, we select 21 long covariates.
+# But for some covariates, the proportion did increase, meaning more subjects are without any observation
+```
+
+
+
+
 
 #### Cognitive assessment
 
@@ -333,7 +396,229 @@ df.long %>%
 ```
 
 
+# Transformation
 
+```{r}
+# Obtain long covariates
+# Manual exclusion ----------------------------------------------------------------------------------------
+# Type of TAU, PTAU and ABETA are character, need to handle non-numerical values first. currently excluded
+vars_manual_remove <- c("TAU", "PTAU", "ABETA")
+
+# Exclude irrelevant variables
+vars_irrelevant <- c(
+  names(data.long)[grepl(".bl", names(data.long))], # Exclude baselines, Years.bl, Month.bl
+  "RID", "time", "event", "status", "DX",
+  "VISCODE", "EXAMDATE", "Y", "M", "Month",
+  "AGE", "age.fup", "COLPROT", "ORIGPROT", "PTID", "SITE",
+  "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4",
+  "FSVERSION", "IMAGEUID", "FLDSTRENG"
+)
+
+y.names <- names(data.long)[!(names(data.long) %in% c("id", vars_manual_remove, vars_irrelevant))]
+
+```
+
+```{r}
+# Testing function for transformation
+
+
+y.stats <- foreach(y = y.names, .combine = rbind) %do% {
+  c(skewness(data.long[, y], na.rm = TRUE), fivenum(data.long[, y], na.rm = TRUE))
+} %>% 
+  data.frame(row.names = NULL)
+
+
+colnames(y.stats) <- c("skewness", "minimum", "lower_hinge", "median", "upper_hinge", "maximum")
+y.stats$var_name <- y.names
+
+y.stats <- y.stats %>% 
+  mutate(symmetry = (upper_hinge - median) / (median - lower_hinge)) %>%
+  select(var_name, skewness, symmetry, everything())
+
+
+threshold.sym <- 0.2
+threshold.skew <- 0.5
+
+# Check for values < 0 => if true, add positive constant before power transformation
+# the power transformations are not monotone
+# that is, not order preserving—if there are both positive and negative values 
+y.transf <- y.stats %>% 
+  mutate(is_neg = minimum < 0,
+         start = -floor(minimum),
+         is_sym_over = symmetry > 1 + threshold.sym,
+         is_sym_under = symmetry < 1 - threshold.sym,
+         is_skew_pos = skewness > 0 + threshold.skew,
+         is_skew_neg = skewness < 0 - threshold.skew
+         ) %>%
+  select(var_name, is_neg, start, is_sym_over, is_sym_under, is_skew_pos, is_skew_neg, everything())
+
+
+View(y.transf)
+```
+
+```{r}
+# for thinking about the choice of threshold
+y.transf %>%
+  filter(!is.infinite(symmetry)) %>%
+  ggplot(aes(x = skewness, y = symmetry)) +
+    geom_point(alpha = 0.5) +
+    geom_hline(yintercept = 1, color = "red", alpha = 0.5) + 
+    geom_vline(xintercept = 0, color = "red", alpha = 0.5)
+```
+
+
+```{r, fig.width=4, fig.height=2}
+y.hist_original <- lapply(y.names, function(y) {
+  g <- data.long %>%
+    ggplot() + 
+      geom_histogram(aes(get(y)), na.rm = TRUE) +
+      geom_vline(xintercept = 0, color = "red") + # Zero
+      geom_vline(xintercept = y.stats$minimum[y.stats$var_name == y], color = "blue") + # Minimum
+      xlab(y) +
+      ggtitle(paste(y, "before transform"))
+  
+  return(g)
+})
+
+
+y.hist_original
+```
+
+
+
+```{r}
+
+data.long %>% 
+  filter(RAVLT.forgetting < -10)
+
+data.long %>% 
+  filter(RAVLT.perc.forgetting < -500)
+
+data.long %>% filter(id == 6073)
+
+# new issue: why is there negative RAVLT forgetting and with very large magnitude...
+# already found in adnimerge
+# Q1: is negative valid?
+# Q2: is very negative valid?
+
+```
+
+
+
+
+
+
+# Subject at risk over time
+
+```{r}
+landmark <- 0:15
+
+res.status <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time <= x) %>%
+    group_by(status) %>%
+    summarise(n = n())
+  df$t <- x
+  return(df)
+}))
+res.status$status <- res.status$status %>% as.character()
+
+res.at_risk <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time > x) %>%
+    summarise(n = n())
+  df$t <- x
+  df$status <- "at risk"
+  return(df)
+}))
+
+res.status <- res.status %>% add_row(res.at_risk)
+
+g <- res.status %>%
+  ggplot(aes(x = t, y = n, group = status, color = status)) +
+    geom_line(aes(linetype = status), size = 0.8) + geom_point() +
+    scale_x_continuous(breaks = landmark) +
+    scale_y_continuous(breaks = 0:16 * 100) +
+    xlab("Years since baseline (t)") + ylab("Number of subjects") + 
+    labs(
+      color = "Status",
+      linetype = "Status"
+    ) +
+    ggtitle("Cumulative number of subjects by status up to time t") +
+  theme_bw()
+
+g
+
+ggsave(filename = "./figure/status_by_time.png", plot = g, width = 8, height = 5)
+```
+
+```{r}
+g <- df.surv_preds %>%
+  select(time, status) %>%
+  ggplot() + 
+  geom_histogram(aes(time, group = status, fill = status),
+                 binwidth = 0.25) +
+  scale_x_continuous(breaks = 0:17) + 
+  ggtitle("Survival time by survival outcome") +
+  labs(fill = "Type") + 
+  xlab("Years since baseline (t)") +
+  theme_bw()
+
+g
+
+ggsave(filename = "./figure/hist_survtime.png", plot = g, width = 8, height = 5)
+```
+
+```{r}
+landmark <- 0:15
+
+res.status <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time > x) %>%
+    group_by(status) %>%
+    summarise(n = n())
+  df$t <- x
+  return(df)
+}))
+res.status$status <- res.status$status %>% as.character()
+
+res.at_risk <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time > x) %>%
+    summarise(n = n())
+  df$t <- x
+  df$status <- "at risk in total"
+  return(df)
+}))
+
+res.status <- res.status %>% add_row(res.at_risk)
+
+g <- res.status %>%
+  ggplot(aes(x = t, y = n, group = status, color = status)) +
+    geom_line(aes(linetype = status), size = 0.8) + geom_point() +
+    scale_x_continuous(breaks = landmark) +
+    scale_y_continuous(breaks = 0:16 * 100) +
+    xlab("Years since baseline (t)") + ylab("Number of subjects") +
+    labs(
+      color = "Type",
+      linetype = "Type"
+    ) +
+    ggtitle("Number of subjects at risk at time t, by survival outcome") +
+  theme_bw()
+
+g
+
+ggsave(filename = "./figure/status_beyond_time.png", plot = g, width = 8, height = 5)
+
+```
 
 # Survival curves
 
