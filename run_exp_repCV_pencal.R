@@ -1,3 +1,12 @@
+library(tidyverse)
+
+source("function_utility_exp.R")
+source("function_evaluation.R")
+
+source("function_pencal_exp.R")
+
+select <- dplyr::select
+
 for (seed in 721:730) {
   # -----------------------------------------------------------------------------------
   # Set experiment parameters here!
@@ -7,8 +16,8 @@ for (seed in 721:730) {
   set_scenario <- "scenario2" # Determine how many longitudinal covariates to use
   is_transformed <- "transformed"
   
-  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # Baseline covariates
-  #baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "APOE4") # Baseline covariates
+#  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # Baseline covariates
+  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "APOE4") # Baseline covariates
   # -----------------------------------------------------------------------------------
   # -----------------------------------------------------------------------------------
   
