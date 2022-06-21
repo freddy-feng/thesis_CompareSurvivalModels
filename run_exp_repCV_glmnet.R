@@ -1,3 +1,17 @@
+library(tidyverse)
+
+require(glmnet)
+require(survival)
+
+source("function_utility_exp.R")
+source("function_evaluation.R")
+
+source("function_glmnet_exp.R")
+
+select <- dplyr::select
+
+
+
 for (seed in 721:730) {
   # -----------------------------------------------------------------------------------
   # Set experiment parameters here!
@@ -33,7 +47,7 @@ for (seed in 721:730) {
   ## Set up for evaluation
   
   # landmark time
-  T.start <- 0
+  T.start <- 1
   landmark <- paste0("lm", T.start)
   # We can predict on years from (T.start + 1) up to T.max
   
