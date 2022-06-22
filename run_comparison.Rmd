@@ -9,21 +9,22 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Purpose
+This markdown is for extracting folds.eval and visualize the results in tables and figures.
 
-
+# Dependencies
 ```{r}
+# Dependencies
 library(tidyverse)
 
-source("function_utility_exp.R")
+source("function_utility.R")
 source("function_evaluation.R")
-
-
 ```
 
 
 
 
-# Comparison
+# Load results from directory
 
 ```{r}
 # Load path to eval results
@@ -31,17 +32,26 @@ source("function_evaluation.R")
 #models.path <- list.files(path = "./output/cheat/") # Using all repeated measurements up to event
 # Note the cheat results suffer from minor coding problems, need to rerun or simply ignore them!
 
-folderpath <- "./output/exp2_repCV_lm0vslm2/"
+# Where the folds.eval are placed
+#folderpath <- "./output/comparison/" # copy folds.eval to here for selected comparison
+folderpath <- "./output/" # Immediate output location of folds.eval
+
 models.path <- list.files(path = folderpath) # Using repeated measurements up to landmark time
-models.path <- models.path[grepl(pattern = "eval_", x = models.path)] # Only include evaluations, not other outputs
-models.path <- models.path[grepl(pattern = "lm2", x = models.path) | grepl(pattern = "lm0", x = models.path)] # Only include landmark 4 
+
+# Filter folds.eval files only
+models.path <- models.path[grepl(pattern = "eval_", x = models.path)]
+
+# Filter by landmark
+#models.path <- models.path[grepl(pattern = "lm2", x = models.path) | grepl(pattern = "lm0", x = models.path)] # Chose landmark
 models.name <- stringr::str_remove_all(stringr::str_remove_all(models.path, ".RData"), "eval_")
 
-models.name
+#models.name
 ```
 
 
 # Present result - tdAUC
+
+## Consolidate fold.evals to data frame
 ```{r, fig.width=8, fig.height=4}
 # ------------------------------------------------------------------------------------------------
 # Summarize tdAUC results
@@ -57,13 +67,12 @@ deltaT <- deltaT[deltaT > T.start]
 # Repeat the following steps for different models
 
 for (i in 1:length(models.name)) {
-  
+
   if (i == 1) {
-    # Result 1
+    # For first model to initialize dataframe
     df.tdauc <- Summarize.tdAUC(
-      model = models.name[i], 
-      path = paste0(folderpath, models.path[i]), 
-      n_fold = n_fold, 
+      name = models.name[i],
+      path = paste0(folderpath, models.path[i]),
       detlaT = deltaT
       )
     
@@ -72,9 +81,8 @@ for (i in 1:length(models.name)) {
 
   # Result i, i > 1
   df.tdauc <- Summarize.tdAUC(
-    model = models.name[i], 
-    path = paste0(folderpath, models.path[i]), 
-    n_fold = n_fold, 
+    name = models.name[i],
+    path = paste0(folderpath, models.path[i]),
     detlaT = deltaT
     )
   
@@ -83,21 +91,253 @@ for (i in 1:length(models.name)) {
     add_row(df.tdauc)
 }
 
-
-# Add method column
-df.tdauc.compare$scenario <- stringr::str_split(df.tdauc.compare$model, pattern = "_", simplify = TRUE)[, 1]
-df.tdauc.compare$method <- stringr::str_split(df.tdauc.compare$model, pattern = "_", simplify = TRUE)[, 2]
-df.tdauc.compare$landmark <- stringr::str_split(df.tdauc.compare$model, pattern = "_", simplify = TRUE)[, 3]
-
+df.tdauc.compare %>% head()
 ```
 
-Plot tdAUC for all
-```{r, fig.width=8, fig.height=4}
+
+
+## Compare with status.bl and without status.bl using pCox
+```{r, fig.width=8, fig.height=5}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
 # ------------------------------------------------------------------------------------------------
 df.tdauc.compare %>%
-#  filter(landmark == "lm0") %>%
+  filter(method == "pCox-bl") %>%
+  filter(!grepl(model.name, pattern = "lasso")) %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model.id,
+    color = factor(n_bl.covariate))
+  ) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+  geom_line(aes(linetype = scenario), size = 0.5, alpha = 0.5) +
+  geom_point(aes(shape = method), alpha = 0.8) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.5, 1)) +
+  xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "Error bar represents the pointwise interval at 2.5% and 97.5%",
+    color = "number of baseline covariates"
+  )  +
+  theme_minimal()
+```
+
+```{r, fig.width=8, fig.height=5}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  filter(method == "pCox-bl") %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model.id,
+    color = factor(n_bl.covariate))
+  ) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+  geom_line(aes(linetype = scenario), size = 0.5, alpha = 0.5) +
+  geom_point(aes(shape = method), alpha = 0.8) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.5, 1)) +
+  xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "Error bar represents the pointwise interval at 2.5% and 97.5%",
+    color = "number of baseline covariates"
+  )  +
+  theme_minimal()
+```
+
+```{r}
+# Print baseline covariates for each scenario
+df.tdauc.compare %>%
+  filter(method == "pCox-bl") %>%
+  group_by(bl.covariate) %>%
+  summarize(n_bl.covariate = unique(n_bl.covariate),
+            scenario = unique(scenario)) %>%
+  arrange(scenario) %>%
+  select(scenario, everything())
+```
+## also include `pCox-lm` in comparison:
+```{r, fig.width=8, fig.height=5}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  filter(scenario == "scenario2") %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = repeated.CV.mean, 
+    group = model.name,
+    color = model.name)
+  ) +
+ # geom_errorbar(aes(
+ #   ymax = repeated.CV.max,
+ #   ymin = repeated.CV.min),
+ #   alpha = 0.3,
+ #   width = 0.3, size = 0.8) +
+  geom_line(aes(linetype = factor(n_bl.covariate)), alpha = 0.8, size = 0.4) +
+  geom_point(aes(shape = method), alpha = 0.6, size = 2.5) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.7, 1)) +
+  xlab("Year from baseline") + ylab("rep CV time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under repeated 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "CV repeated in 10 different seeds",
+#    caption = "Error bar represents the max and min",
+    linetype = "number of (candidate) baseline covariates",
+    color = "model"
+  )  +
+  theme_minimal()
+```
+
+```{r}
+df.tdauc.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop")
+```
+
+## Compare ridge and lasso
+```{r, fig.width=8, fig.height=5}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  filter(scenario == "scenario2") %>%
+  filter(method == "pCox-lm") %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = repeated.CV.mean, 
+    group = model.name,
+    color = model.name)
+  ) +
+ # geom_errorbar(aes(
+ #   ymax = repeated.CV.max,
+ #   ymin = repeated.CV.min),
+ #   alpha = 0.3,
+ #   width = 0.3, size = 0.8) +
+  geom_line(aes(linetype = factor(n_bl.covariate)), alpha = 0.8, size = 0.4) +
+  geom_point(aes(shape = method), alpha = 0.6, size = 2.5) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.8, 1)) +
+  xlab("Year from baseline") + ylab("rep CV time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under repeated 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "CV repeated in 10 different seeds",
+#    caption = "Error bar represents the max and min",
+    linetype = "number of (candidate) baseline covariates",
+    color = "model"
+  )  +
+  theme_minimal()
+```
+
+## Compare pencal and pCox
+```{r, fig.width=8, fig.height=5}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  filter(method == "pCox-lm" | method == "pencal") %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = repeated.CV.mean, 
+    group = model.name,
+    color = model.name)
+  ) +
+ # geom_errorbar(aes(
+ #   ymax = repeated.CV.max,
+ #   ymin = repeated.CV.min),
+ #   alpha = 0.3,
+ #   width = 0.3, size = 0.8) +
+  geom_line(aes(linetype = factor(n_bl.covariate)), alpha = 0.8, size = 0.4) +
+  geom_point(aes(shape = method), alpha = 0.6, size = 2.5) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.8, 1)) +
+  xlab("Year from baseline") + ylab("rep CV time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under repeated 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "CV repeated in 10 different seeds",
+#    caption = "Error bar represents the max and min",
+    linetype = "number of (candidate) baseline covariates",
+    color = "model"
+  )  +
+  theme_minimal()
+```
+
+```{r}
+df.tdauc.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_"))
+```
+
+
+## Plot to compare different baseline covariates for pCox
+```{r, fig.width=6, fig.height=4}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  filter(landmark == "lm2") %>%
   filter(method == "pCox") %>%
   filter(scenario == "scenario2") %>%
   ggplot(aes(
@@ -110,8 +350,42 @@ df.tdauc.compare %>%
 #    ymin = ci.lower),
 #    alpha = 0.3,
 #    width = 0.3, size = 0.8) + 
-  geom_point(aes(shape = method, color = landmark), alpha = 0.8) +
-  geom_line(aes(linetype = method, color = landmark), size = 0.5, alpha = 0.8) +
+  geom_point(aes(shape = basecov, color = basecov), alpha = 0.8) +
+  geom_line(aes(linetype = basecov, color = basecov), size = 0.5, alpha = 0.8) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.7, 1)) +
+  xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
+  )  +
+  theme_minimal()
+  
+```
+
+## Plot to compare different baseline covariates for pencal at lm2, scenario2
+```{r, fig.width=8, fig.height=4}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  filter(landmark == "lm2") %>%
+  filter(method == "pencal") %>%
+  filter(scenario == "scenario2") %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model)
+  ) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+  geom_point(aes(shape = method, color = basecov), alpha = 0.8) +
+  geom_line(aes(linetype = method, color = basecov), size = 0.5, alpha = 0.8) +
   scale_x_continuous(breaks = deltaT) + 
   scale_y_continuous(breaks = 0:10 / 10) +
   coord_cartesian(ylim = c(0.7, 1)) +
@@ -127,7 +401,9 @@ df.tdauc.compare %>%
 
 
 
-Plot tdAUC for scenario 1 or 2 separately:
+
+
+## Plot tdAUC for scenario 1 or 2 separately:
 ```{r}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
@@ -187,7 +463,7 @@ df.tdauc.compare %>%
   theme_minimal()
 ```
 
-Plot scaled and MFPCCox only:
+## Plot scaled and MFPCCox only:
 ```{r, fig.width=8}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
@@ -257,12 +533,11 @@ for (i in 1:length(models.name)) {
     add_row(df.c.index)
 }
 
-# Add method column
-df.c.index.compare$method <- stringr::str_split(df.c.index.compare$model, pattern = "_", simplify = TRUE)[, 2]
 
 
 ```
 
+Plot the c-index 
 ```{r, fig.width=8}
 # ------------------------------------------------------------------------------------------------
 # Plot df.c.index.compare

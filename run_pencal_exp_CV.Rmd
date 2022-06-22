@@ -118,7 +118,6 @@ for (i in 1:n_fold) {
     step3 = res$step3,
     training.time = res$runtimes
     )
-  # -----------------------------------------------------------------------------------
 }
 # -----------------------------------------------------------------------------------
 ```
@@ -129,6 +128,7 @@ for (i in 1:n_fold) {
 ## Testing
 
 ```{r}
+# -----------------------------------------------------------------------------------
 # Initialize result
 folds.eval <- vector(mode = "list", length = n_fold)
 
@@ -226,9 +226,8 @@ for (i in 1:n_fold) {
       covariate = folds[[i]]$model$covariate,
       training.time = folds[[i]]$model$training.time
     )
-  # -----------------------------------------------------------------------------------
 }
-
+# -----------------------------------------------------------------------------------
 ```
 
 
@@ -278,12 +277,14 @@ g
 # Save
 
 ```{r}
+# -----------------------------------------------------------------------------------
 # Save evaluation result
 folder <- "./output/eval_"
 path.eval <- paste0(folder, model.name, "_seed", seed, ".RData")
 
 save(folds.eval, file = path.eval)
 print(paste("Performance in folds saved:", path.eval))
+# -----------------------------------------------------------------------------------
 ```
 
 ```{r, eval=FALSE}
