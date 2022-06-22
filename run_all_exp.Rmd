@@ -14,79 +14,48 @@ knitr::opts_chunk$set(echo = TRUE)
 # rm(list = ls())
 library(tidyverse)
 
-source("function_utility_exp.R")
+source("function_utility.R")
 source("function_evaluation.R")
 
 select <- dplyr::select
 ```
 
 
-# Experiment schedule
-
-```{r}
-exp.table <- data.frame(do.call(rbind, list(
-  c("scenario0", "pCox", "scaled", "not_transformed"),
-  c("scenario1", "pencal", "scaled", "not_transformed"),
-  c("scenario1", "pCox", "scaled", "not_transformed"),
-  c("scenario1", "MFPCCox", "scaled", "not_transformed"),
-  c("scenario2", "pencal", "scaled", "not_transformed"),
-  c("scenario2", "pCox", "scaled", "not_transformed"),
-  c("scenario2", "MFPCCox", "scaled", "not_transformed")
-  )))
-
-colnames(exp.table) <- c(
-  "scenario",
-  "method",
-  "scaling",
-  "transformation"
-)
-
-exp.table <- exp.table %>%
-  unite("model.name", c("scenario", "method", "scaling"), sep = "_", remove = FALSE)
-
-exp.table$path.data <- NA
-
-# Result paths
-exp.table$path.model <- NA
-exp.table$path.eval <- NA
-
-print("----------------------------------------------------------------------")
-print("Experiment schedule:")
-print(exp.table)
-print("----------------------------------------------------------------------")
-```
-
-
 # Set up
-
-
 
 ## Create splits
 
 ```{r}
 # -----------------------------------------------------------------------------------
+method <- "pCox-bl"
+# -----------------------------------------------------------------------------------
 # Set experiment parameters here!
 # -----------------------------------------------------------------------------------
-n_fold <- 10 # Cross validation
 seed <- 721 # Vary this for repeated CV
-set_scenario <- "scenario1" # Determine how many longitudinal covariates to use
-is_transformed <- "transformed"
+print(paste("This CV will perform train-test split using seed", seed))
 
-baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # Baseline covariates
-#baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "APOE4") # Baseline covariates
+n_fold <- 10 # Cross validation
+
+set_scenario <- "scenario2" # Determine how many longitudinal covariates to use
+
+is_transformed <- "transformed"
+is_scaled <- "scaled"
+
+# Baseline covariates (not time-varying in adnimerge)
+baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # b5 
+#baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "APOE4") # b4
 # -----------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------------
 # Load data
 # -----------------------------------------------------------------------------------
-# Contains two dataframes df.surv_preds and df.long_censored
-path.data <- "adni_cleaned.RData"
+# Load cleaned data
+path.data <- "./data_cleaned/adni_cleaned.RData"
 load(path.data)
 
-# may also reduce the number of columns here to reduce size
-# Note: make sure data.surv and data.long are arranged by id and {id, age.fup}
-# to ensure proper function with pencal package
+# [future] may also reduce the number of columns here to reduce size
+# Note: data.surv and data.long are arranged by id and {id, age.fup} to ensure properly use pencal
 data.surv <- df.surv_preds
 
 if (is_transformed == "transformed") {
@@ -94,25 +63,25 @@ if (is_transformed == "transformed") {
 } else {
   data.long <- df.long_censored
 }
-
-## Set up for evaluation
-
+# -----------------------------------------------------------------------------------
+# Set up for landmarking and evaluation
+# -----------------------------------------------------------------------------------
 # landmark time
 T.start <- 2
-landmark <- paste0("lm", T.start)
-# We can predict on years from (T.start + 1) up to T.max
+landmark <- paste0("lm", T.start) # File name description
 
 T.max <- floor(max(data.surv$time)) # Based on last available observation in train set
-# [Warning] forsee a potential bug may happen by chance if the longest observation is in test set, but not train
+# [Warning] foresee a potential bug may happen by chance if the longest observation is in test set, but not train
 
 # Predict 15 years onward from landmark time, but not more than max observed time
 deltaT <- 1:T.max # A vector of prediction times, starting from baseline onward
 deltaT <- deltaT[deltaT > T.start]
 
-# I need to change deltaT later because the notation is inconsistent with the symbol in paper
-# the true delta T should be prediction time - landmark time!!!!!!!
+# [Future] May need to change deltaT later because the notation is inconsistent with the symbol in paper
+# the true delta T should be prediction time - landmark time! Avoid confusion!
 
-print(paste("Evaluation on time since baseline =", paste(deltaT, collapse = " ")))
+print(paste("[Report] Evaluation on times since baseline (time=0):", paste(deltaT, collapse = " ")))
+# -----------------------------------------------------------------------------------
 
 # Select subjects at risk since landmark time
 data.surv <- data.surv %>%
@@ -132,60 +101,147 @@ print(paste("Number of visits before landmark time (upper bound of measurements)
 # -----------------------------------------------------------------------------------
 # Initialize
 # -----------------------------------------------------------------------------------
+
+
+
 # Manual exclusion
-# Type of TAU, PTAU and ABETA are character, need to handle non-numerical values first. currently excluded
 vars_manual_remove <- c("TAU", "PTAU", "ABETA")
+# Note: Type of TAU, PTAU and ABETA are character
+# need to handle non-numerical values first. currently excluded
 
 # Exclude irrelevant variables
 vars_irrelevant <- c(
-  names(data.long)[grepl(".bl", names(data.long))], # Exclude baselines, Years.bl, Month.bl
-  "RID", "time", "event", "status", "DX",
-  "VISCODE", "EXAMDATE", "Y", "M", "Month",
-  "AGE", "age.fup", "COLPROT", "ORIGPROT", "PTID", "SITE",
-  "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4",
-  "FSVERSION", "IMAGEUID", "FLDSTRENG"
+  names(data.long)[grepl(".bl", names(data.long))], # Exclude variables with `.bl` suffix including Years.bl and Months.bl
+  "id", "RID",
+  "time", "event", "status", "DX", # Survival information
+  "VISCODE", "EXAMDATE", "Y", "M", "Month", # Time variables
+  "AGE", "age.fup", 
+  "COLPROT", "ORIGPROT", "PTID", "SITE", # Visit information
+  "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4", # Baseline variables
+  "FSVERSION", "IMAGEUID", "FLDSTRENG" # Metadata for image
 )
 
 vars_ignore <- c(vars_manual_remove, vars_irrelevant) # Variables that will not be considered as long covariates
 
-# Updating the time-varying covariates in data.surv according to landmark time
+# -----------------------------------------------------------------------------------
+# Update values of time-varying covariates in surv data when landmark time > 0
+# for methods pCox-bl and pCox-lm
+
+# The original values observed at baseline i.e. VISCODE=="bl"
+# are replaced by last observed value on or before landmark
+
+# Step 1: set the covariates to update, should cover the candidate long covariates
+vars_long <- names(data.surv)[!(names(data.surv) %in% vars_ignore)]
+
+# Step 2: update values in surv data
 # For each subject, the latest observed value of time-varying covariate is used
-# The value can be transformed or not, depending on data.long assignment
+# The value can be transformed or not, depending on data.long chosen
+use_baseline <- NULL
+if (method == "pCox-bl" | method == "pCox-lm") {
 
-# vars_candidate are the set of candidate long covariates BEFORE screening
-vars_candidate <- names(data.surv)[!(names(data.surv) %in% c("id", vars_ignore))]
+  if (method == "pCox-bl") {
+    use_baseline = TRUE
+  } else {
+    use_baseline = FALSE
+  }
+  
+  data.surv <- Update_surv_at_landmark(
+    surv = data.surv,
+    long = data.long,
+    y.names = vars_long,
+    use_baseline = use_baseline)
+  
+  print("[Remind] pCox method is used, the additional covariates will be updated")
+}
 
 # -----------------------------------------------------------------------------------
-# Update landmark value
-# Can it be speed up?
-data.surv <- Update_surv_at_landmark(
-  surv = data.surv, 
-  long = data.long, 
-  y.names = vars_candidate)
+# Obtain a list of folds to initialize cross validation
+# Involves:
+# - Select candidate longitudinal covariates based on missingness
+# - Create folds based on stratified train-test split for n-fold CV
 
-# -----------------------------------------------------------------------------------
+# Get scaling table
 folds <- Initialize_exp(
   data.surv = data.surv,
   data.long = data.long,
   baseline.covs = baseline.covs,
-  vars_ignore = vars_ignore,
+  vars_not_long = vars_ignore,
   set_scenario = set_scenario,
   n_fold = n_fold,
   seed = seed
   )
-# Get scaling table
-# Note: depends on is_transformed, different set of data.long will be used, hence different scaling factor will be determined
 
-#Check_folds(data.surv, folds) # Checking the split process, stratification
+# Note: depending on `is_transformed`, either original or transformed version of data.long will be used
+# the different scaling parameters are different between these cases
 
-path.template <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
+# -----------------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------------
+# Save folds for training and future checking
+subfolder <- "./output/temp/"
+filename <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
+path.template <- paste0(subfolder, filename)
 
 save(folds, file = path.template)
 
 print(paste("template of folds saved to path:", path.template))
+
+# -----------------------------------------------------------------------------------
+# You may want to double check data.long and data.surv before proceeding to training.
+# Note that the values in data.surv may be changed in landmarking step.
+# Scaling will be carried out in training step.
+
+#Check_folds(data.surv, folds) # Uncomment to check the stratification / class balance after split
+
+
 # -----------------------------------------------------------------------------------
 ```
 
 
-# Run glmnet, pencal, mfpccox
+# Run glmnet, pencal, mfpccox script or markdown
+
+# Debug
+```{r, eval=FALSE}
+# Check for landmarking
+
+# Check subjects at risk
+data.surv$time %>% min() > T.start
+
+# Check truncation of measurments
+data.long$Years.bl %>% max() < T.start
+
+# Check the update of surv data for pCox methods
+
+df.surv_preds %>% filter(id %in% 1:5) %>% select(id, vars_long) # Original
+
+data.surv %>% filter(id %in% 1:5) %>% select(id, vars_long) # Updated, used in model
+
+data.long %>% filter(id %in% 1:5) %>% select(id, vars_long) # Repeated measurements, used in model
+
+
+```
+
+Check if the Update_surv_at_landmark works as intended in different use_baseline
+```{r, eval=FALSE}
+data.surv.bl <- Update_surv_at_landmark(
+  surv = data.surv,
+  long = data.long,
+  y.names = vars_long,
+  use_baseline = TRUE)
+
+data.surv.lm <- Update_surv_at_landmark(
+  surv = data.surv,
+  long = data.long,
+  y.names = vars_long,
+  use_baseline = FALSE)
+```
+
+```{r}
+df.surv_preds %>% filter(id %in% 1:5) %>% select(id, vars_long) # Original
+
+data.surv.bl %>% filter(id %in% 1:5) %>% select(id, vars_long) # Updated, used in model
+data.surv.lm %>% filter(id %in% 1:5) %>% select(id, vars_long) # Updated, used in model
+
+data.long %>% filter(id %in% 1:5) %>% select(id, vars_long) # Repeated measurements, used in model
+```
 

@@ -29,28 +29,44 @@ source("function_pencal_exp.R")
 refer to folds template prepared in run_all_exp.rmd
 
 ```{r}
-rm("folds")
-rm("folds.eval")
+# -----------------------------------------------------------------------------------
+# Set model param
 
-# Initialize fold
-print(path.template)
-load(file = path.template)
-
-# Model param
-penalty <- "ridge"
-is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
-is_standardized <- "std" # Refer to step 3 of pencal, standardizing the random effects summary
 is_transformed <- is_transformed
+is_scaled <- is_scaled # Set to "scaled" to scale covariates for LMMs
+is_standardized <- "std" # Refer to step 3 of pencal, standardizing the random effects summary
+
+penalty <- "ridge"
+
 landmark <- paste0("lm", T.start)
+n_basecov <- paste0("b", length(baseline.covs))
 
-hyperparam <- paste(c(landmark, is_transformed, is_scaled, is_standardized, penalty), collapse = "_") # Use hyperparam to describe model
+model.hyperparam <- list(
+  method = method,
+  set_scenario = set_scenario,
+  landmark = landmark,
+  is_scaled = is_scaled,
+  is_transformed = is_transformed,
+  is_standardized = is_standardized,
+  penalty = penalty
+)
 
-print(hyperparam)
+hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled, is_standardized, penalty), collapse = "_") # Use hyperparam to describe model
+model.name <- paste(c(method, landmark, hyperparam), collapse = "_")
+
+print(paste("Begin training for model:", model.name))
+# -----------------------------------------------------------------------------------
 ```
 
 # Train
 
 ```{r}
+# -----------------------------------------------------------------------------------
+rm("folds")
+rm("folds.eval")
+
+print(path.template)
+load(file = path.template) # Load folds template
 # -----------------------------------------------------------------------------------
 # Fit models in CV loop
 # -----------------------------------------------------------------------------------
@@ -91,23 +107,21 @@ for (i in 1:n_fold) {
   # -----------------------------------------------------------------------------------
   # pencal - Store results
   # -----------------------------------------------------------------------------------
-  folds[[i]]$pencal <- list(
+  folds[[i]]$model <- list(
+    name = model.name,
+    hyperparam = model.hyperparam,
+    covariate = list(
+      base = folds[[i]]$baseline.covs,
+      long = folds[[i]]$candidate.long.covs),
     step1 = res$step1,
     step2 = res$step2,
     step3 = res$step3,
-    runtimes = res$runtimes,
-    hyperparam = list(
-      penalty = penalty,
-      is_scaled = is_scaled,
-      is_standardized = is_standardized
+    training.time = res$runtimes
     )
-  )
   # -----------------------------------------------------------------------------------
 }
 # -----------------------------------------------------------------------------------
 ```
-
-
 
 
 # Evaluation
@@ -136,35 +150,13 @@ for (i in 1:n_fold) {
    surv.new <- tmp$testing.surv
    long.new <- tmp$testing.long 
   
-  
-  # testing.surv <- tmp$testing.surv
-  # testing.long <- tmp$testing.long
-  # ----------------------------------------------------------------------------------- 
-#   # Landmarking -only consider subjects at risk at landmark time T.start
-#   ids.at_risk <- testing.surv %>% 
-#     filter(time > T.start) %>%
-#     select(id) %>%
-#     unlist(use.names = FALSE)
-#   
-#   surv.new <- testing.surv %>%
-#     filter(id %in% ids.at_risk)
-#   
-#   # Commented out this part to use all longitudinal information
-# #  long.new <- testing.long %>%
-# #    filter(id %in% ids.at_risk) %>%
-# #    filter(Years.bl <= T.start) # Filter long observations after landmark time
-#   long.new <- testing.long %>%
-#     filter(id %in% ids.at_risk)
-#   
-#  print(paste("[Count] subject at risk at landmark", length(ids.at_risk)))
-
   # -----------------------------------------------------------------------------------  
   # pencal - Evaluate model
   # ----------------------------------------------------------------------------------- 
   # Extract fitted models
-  step1 <- folds[[i]]$pencal$step1
-  step2 <- folds[[i]]$pencal$step2
-  step3 <- folds[[i]]$pencal$step3
+  step1 <- folds[[i]]$model$step1
+  step2 <- folds[[i]]$model$step2
+  step3 <- folds[[i]]$model$step3
   
   # Obtain predicted random effect
   # res object comes from fitted pencal
@@ -203,13 +195,11 @@ for (i in 1:n_fold) {
     )
   # -----------------------------------------------------------------------------------
   
-  
-  
   # -----------------------------------------------------------------------------------
   # General - Compute tdROC and tdAUC, c-index
   # -----------------------------------------------------------------------------------
   res.tdauc <- Evaluate_tdauc(surv.new, linpred, T.start, deltaT)
-  res.c.naive <- survcomp::concordance.index(
+  res.c.index <- survcomp::concordance.index(
     x = linpred, # vector of risk predictions
     surv.time = surv.new$time, # vector of event times
     surv.event = surv.new$event, # vector of event occurence indicators
@@ -220,15 +210,22 @@ for (i in 1:n_fold) {
   # -----------------------------------------------------------------------------------
   # Store results
   # -----------------------------------------------------------------------------------
-#  folds.eval[[i]]$ids.test_no_missing <- ids.valid
+  # Performance
   folds.eval[[i]]$perf <- list(
     landmark = T.start,
     deltaT = deltaT,
-    c.index = res.c.naive$c.index,
+    c.index = res.c.index$c.index,
     tdauc = res.tdauc$tdauc,
     tp = res.tdauc$tp,
     fp = res.tdauc$fp
   )
+  # Carry over model information in case training model is not kept
+  folds.eval[[i]]$model.info <- list(
+      name = folds[[i]]$model$name,
+      hyperparam = folds[[i]]$model$hyperparam,
+      covariate = folds[[i]]$model$covariate,
+      training.time = folds[[i]]$model$training.time
+    )
   # -----------------------------------------------------------------------------------
 }
 
@@ -241,8 +238,7 @@ for (i in 1:n_fold) {
 
 
 ```{r}
-print("cv.c-index")
-# Estimated C-index
+print("Print c-index in CV")
 cv.c.index <- sapply(folds.eval, function(x) x$perf$c.index)
 mean(cv.c.index) %>% round(3)
 sd(cv.c.index) %>% round(3)
@@ -273,44 +269,33 @@ cv.tdauc %>%
 
 
 ```{r, fig.width=15, fig.height=9, eval=FALSE}
-# Plot all tdROC
+g <- Plot_all_tdROC(folds.eval)
 
-for (i in 1:n_fold) {
-  tdroc.list <- lapply(1:length(deltaT), function(j) {
-    tp <- folds.eval[[i]]$perf$tp[[j]]
-    fp <- folds.eval[[i]]$perf$fp[[j]]
-    ggplot(data = data.frame(TP = tp, FP = fp)) +
-      geom_point(aes(x = FP, y = TP), size = 0.2) + 
-      geom_abline(slope = 1, intercept = 0, linetype = "dashed") + 
-      labs(
-        title = paste("tdROC for prediction time =", deltaT[j]),
-        subtitle = paste("tdAUC =", round(folds.eval[[i]]$perf$tdauc[[j]], 3))
-      )
-  })
-  out <- ggpubr::ggarrange(plotlist = tdroc.list, ncol = 5, nrow = 3)
-  return (out)
-}
+g
 ```
 
 
 # Save
 
-
-
-
 ```{r}
 # Save evaluation result
-tmp <- paste0("./output/eval_", set_scenario, "_pencal_", hyperparam, "_seed", seed, ".RData")
-save(folds.eval, file = tmp)
-print(paste("folds.eval saved to path:", tmp))
+folder <- "./output/eval_"
+path.eval <- paste0(folder, model.name, "_seed", seed, ".RData")
+
+save(folds.eval, file = path.eval)
+print(paste("Performance in folds saved:", path.eval))
 ```
 
-```{r}
+```{r, eval=FALSE}
 # [Optional] save model
-tmp <- paste0("./model/model_", set_scenario, "_pencal_", hyperparam, "_seed", seed, ".RData")
-save(folds, file = tmp)
+folder <- "./model/model_"
+path.model <- paste0(folder, model.name, "_seed", seed, ".RData")
 
-print(paste("Trainined models in folds saved to path:", tmp))
+save(folds, file = path.model)
+print(paste("Models in folds saved:", path.model))
+
 ```
+
+
 
 

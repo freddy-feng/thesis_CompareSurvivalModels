@@ -1,84 +1,71 @@
 # ------------------------------------------------------------------------------------------------
-# Contains utility function for setting up experiment
+# Contains utility functions for setting up experiment
 # ------------------------------------------------------------------------------------------------
-#
 require(tidyverse)
 require(foreach)
 require(ggpubr)
 require(moments)
-
+# ------------------------------------------------------------------------------------------------
+# Initialize folds list for cross validation
+# ------------------------------------------------------------------------------------------------
 Initialize_exp <- function(
     data.surv,
     data.long,
     baseline.covs, 
-    vars_ignore,
+    vars_not_long,
     set_scenario,
     n_fold, 
     seed) {
   
   # -----------------------------------------------------------------------------------
-  # Prepare candidate longitudinal covariates
+  # Select candidate longitudinal covariates based on missingness
   # -----------------------------------------------------------------------------------
+  # Determine a set of longitudinal covariates suitable for model
   # Set set_scenario to "literature" to use a manually chosen set of long covairates i.e. vars_literature
-  # Options available: "scenario1", "scenario2", "literature"
+  # Options available: "scenario1", "scenario2", "literature", "scenario0"(not tested)
 
   # Ignore vars_literature if set_scenario is set to TRUE
   vars_literature <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ")
   # This is a subset of longitudinal covariates chosen according to previous literature
   
-  # # Manual exclusion ----------------------------------------------------------------------------------------
-  # # Type of TAU, PTAU and ABETA are character, need to handle non-numerical values first. currently excluded
-  # vars_manual_remove <- c("TAU", "PTAU", "ABETA")
-  # 
-  # # Exclude irrelevant variables
-  # vars_irrelevant <- c(
-  #   names(data.long)[grepl(".bl", names(data.long))], # Exclude baselines, Years.bl, Month.bl
-  #   "RID", "time", "event", "status", "DX",
-  #   "VISCODE", "EXAMDATE", "Y", "M", "Month",
-  #   "AGE", "age.fup", "COLPROT", "ORIGPROT", "PTID", "SITE",
-  #   "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4",
-  #   "FSVERSION", "IMAGEUID", "FLDSTRENG"
-  # )
-  # # -----------------------------------------------------------------------------------
   
-  ## Filter candidate longitudinal covariates automatically based on missingness criteria
-  
+  # Step 1: compute missingness statistics on full data
+  # to filter candidate longitudinal covariates automatically 
   missing_proportions <- Compute_missing_proportions(
     data.long = data.long,
-    vars_filter = vars_ignore, 
+    vars_filter = vars_not_long, 
     is_include = FALSE
   )
-  # -----------------------------------------------------------------------------------
   
-  # Construct a set of longitudinal candidate covariates
+  # Step2: determine a set of longitudinal covariates suitable for model
+  # controlled by a pre-defined limit, hence scenario setting
   
   # Set cut-off for maximum proportion of subjects without any values for any covariates
   # Set to 0 to ONLY consider covariates with subjects containing at least 1 measurement
   missing_proportion_limit <- NULL
+  
   if (set_scenario == "scenario1") {
     missing_proportion_limit <- 0 
   } else if (set_scenario == "scenario2") {
     missing_proportion_limit <- 0.1
   }
-  
-  vars_missing <- Filter_vars_candidate(
-    missing_proportions,
-    missing_proportion_limit)
-  # -----------------------------------------------------------------------------------
-  # Compute union of all variables to be excluded in LMMs
-  vars_exclude <- Reduce(
-    union, list("id", 
-                vars_ignore,
-                vars_missing))
-  
-  vars_candidate <- names(data.long)[!(names(data.long) %in% vars_exclude)] %>%
-    sort()
-  # -----------------------------------------------------------------------------------
+
   # Set y.names
   if (set_scenario == "scenario1" | set_scenario == "scenario2") {
     # Automatic selection based on criteria
     # Exclude longitudinal covariates that exceeded the missing_proportion_limit
-    y.names <- vars_candidate
+    vars_missing <- Filter_vars_candidate(
+      missing_proportions,
+      missing_proportion_limit)
+    
+    # Compute union of variables to be excluded in LMMs
+    # Ignore too many missing or irrelevant or baseline covariates
+    vars_exclude <- Reduce(
+      union, list(vars_not_long, vars_missing))
+    
+    y.names <- names(data.long)[!(names(data.long) %in% vars_exclude)] %>%
+      sort()
+
     print("set_scenario is set to TRUE. All available covariates will be considered and screened for missing proportions.")
     print(paste("[Report] Found", length(vars_missing), 
                 "covariates with proportion of subjects without any observation exceeded user-defined limit of",
@@ -90,14 +77,17 @@ Initialize_exp <- function(
     print(vars_missing)
     print("---------------------------------------------------------------------------------------------------")
   } else if (set_scenario == "literature") {
-    print("set_scenario is set to literature")
+    print("[Remind] set_scenario is set to literature to use pre-defined long covariates")
     y.names <- vars_literature
+  } else if (set_scenario == "scenario0") {
+    print("[Remind] set_scenario is set to scenario0 to not use long covariates")
+    y.names <- NULL
   } else {
-    stop("Undefined sceanrio. Please check set_scenario.")
+    stop("Undefined scenario name. Please check input set_scenario.")
   }
   
-  
-  print("The following covariate(s) will be used for LMM:")
+  # Print long covariates for model
+  print("[Report] The following longitudinal covariate(s) will be used for modeling:")
   print("---------------------------------------------------------------------------------------------------")
   print(y.names)
   print("---------------------------------------------------------------------------------------------------")
@@ -106,8 +96,7 @@ Initialize_exp <- function(
   # View(missing_proportions)
   
   # -----------------------------------------------------------------------------------
-  # Create folds, commonly shared between methods
-  # Stratified train-test split for n-fold CV
+  # Create folds based on stratified train-test split for n-fold CV
   # -----------------------------------------------------------------------------------
   # folds is a list containing fitted models and train test ids
   # initialize folds here empty list of n_fold size
@@ -117,11 +106,12 @@ Initialize_exp <- function(
   # -----------------------------------------------------------------------------------
   # Prepare scaling table and store experiment parameters
   
+  # Select variables required scaling (numeric), include baseline and long covariates, exclude categorical
   vars_scale <- select_if(
     data.long %>% 
       select(c(all_of(baseline.covs), all_of(y.names))) %>%
-      select(-c(AGE, APOE4)),
-    is.numeric) %>%
+      select(-c(AGE, APOE4)), # Exclude categorical
+    is.numeric) %>% 
     names()
   
 
@@ -134,6 +124,8 @@ Initialize_exp <- function(
 
   
   # -----------------------------------------------------------------------------------
+  # Compute scaling parameters for each fold
+  # Store metadata for reuse in future
   for (i in 1:n_fold) {
     # -----------------------------------------------------------------------------------
     # Subset data for fold i
@@ -145,26 +137,25 @@ Initialize_exp <- function(
     
     ## Train set (complement to test set)
     training.surv <- data.surv %>% 
-      filter(!(id %in% testing.surv$id))
+      filter(!(id %in% folds[[i]]$ids.test))
     training.long <- data.long %>% 
-      filter(id %in% training.surv$id)
+      filter(!(id %in% folds[[i]]$ids.test))
     # -----------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------
-    # Construct scaling table using TRAINING data
+    # Compute scaling parameters using TRAINING data
     scaling_table <- Compute_scaling_table(training.long, vars_scale)
     # -----------------------------------------------------------------------------------
-    
     
     # -----------------------------------------------------------------------------------
     # Store experiment data and metadata
     # -----------------------------------------------------------------------------------
     folds[[i]]$scenario <- set_scenario
+    folds[[i]]$missing_proportions <- missing_proportions
+    folds[[i]]$missing_proportion_limit <- missing_proportion_limit
+    
     folds[[i]]$seed.split <- seed
     
     folds[[i]]$scaling_table <- scaling_table
-    
-    folds[[i]]$missing_proportions <- missing_proportions
-    folds[[i]]$missing_proportion_limit <- missing_proportion_limit
     
     folds[[i]]$baseline.covs <- baseline.covs
     folds[[i]]$candidate.long.covs <- y.names
@@ -172,12 +163,12 @@ Initialize_exp <- function(
   
   return(folds)
 }
+# End of Initialize_exp function
 # ------------------------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------------------------
 # Generate fold ids for train-test split
 # ------------------------------------------------------------------------------------------------
-
 Create_folds <- function(surv, n_fold, seed) {
   
   set.seed(seed)
@@ -207,9 +198,11 @@ Create_folds <- function(surv, n_fold, seed) {
   return (folds)
 }
 # ------------------------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------------------------
 # Check results from train-test split
 # ------------------------------------------------------------------------------------------------
-Check_folds <- function (surv, folds) {
+Check_folds <- function(surv, folds) {
   print("--------------------------------------------------------------------------------")
   print("Check stratification by events in test set for each fold:")
   print("--------------------------------------------------------------------------------")
@@ -259,7 +252,7 @@ Compute_missing_proportions <- function(data.long, vars_filter, is_include = FAL
       select(all_of(vars_filter))
   } else if (is_include == FALSE) { # Default is to supply the vars to ignore for filtering
     data.long <- data.long %>%
-      select(-all_of(vars_filter))
+      select(-all_of(vars_filter), "id")
   }
   
   missing_proportions <- data.long %>%
@@ -292,21 +285,22 @@ Compute_missing_proportions <- function(data.long, vars_filter, is_include = FAL
   return(missing_proportions)
 }
 # ------------------------------------------------------------------------------------------------
-#
+
 # ------------------------------------------------------------------------------------------------
 # Return a vector of covariate names that exceeded the user defined missing proportion limit
 # ------------------------------------------------------------------------------------------------
 Filter_vars_candidate <- function(missing_proportions, missing_proportion_limit) {
-  ## Filter covariates with missing proportions exceeding pre-defined limit
+  # Filter covariates with missing proportions exceeding pre-defined limit
   vars_missing <- missing_proportions %>%
     filter(proportion_y_missing > missing_proportion_limit) %>% # Higher than limit is undesirable
     select(var_name) %>%
     unlist(use.names = FALSE) %>%
     sort()
+  
   return(vars_missing)
 }
 # ------------------------------------------------------------------------------------------------
-#
+
 # ------------------------------------------------------------------------------------------------
 # Return a scaled dataframe from data_to_scale using parameters in scaling table
 # ------------------------------------------------------------------------------------------------
@@ -320,10 +314,11 @@ Scale_covariates <- function(data_to_scale, scaling_table) {
     
     data_to_scale[, x] <- (data_to_scale[, x] - params["mu"]) / params["sd"]
   }
+  
   return(data_to_scale)
 }
 # ------------------------------------------------------------------------------------------------
-#
+
 # ------------------------------------------------------------------------------------------------
 # Return a dataframe containing the (scalable, numeric) variables names, mu, sd
 # ------------------------------------------------------------------------------------------------
@@ -335,10 +330,11 @@ Compute_scaling_table <- function(data, vars_scale) {
   scaling_table$vars <- vars_scale
   scaling_table <- scaling_table %>%
     select(vars, everything())
+  
   return(scaling_table)
 }
 # ------------------------------------------------------------------------------------------------
-#
+
 # ------------------------------------------------------------------------------------------------
 # Return a list of train and test data
 # ------------------------------------------------------------------------------------------------
@@ -363,7 +359,7 @@ Get_train_test_data <- function(
     filter(!(id %in% ids.test))
   
   # -----------------------------------------------------------------------------------
-  # Scaling
+  # Scaling - update train test set if scaling is required
   # -----------------------------------------------------------------------------------
   if (is_scaled == "scaled") {
     # Scale using scaling parameters in scaling table
@@ -494,22 +490,25 @@ Transform_covariates <- function(
     data.long.transformed = data.long.transformed,
     summary = y.stats.transformed
   ))
+  # End of Transform_covariates
 }
+# ------------------------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------------------------
 # Plot to compare transformation
-# Ouput: Save figures to ./output/
+# Output: Save histogram before and after trasnformation to ./output/transformation/
 # ------------------------------------------------------------------------------------------------
 Plot_transformation <- function(
-    data.long,
-    data.long.transformed,
-    y.stats.transformed) {
+    data.long, # Before
+    data.long.transformed, # After
+    summary, # Transformation summary
+    folder = "./output/transformation/") {
   
-  y.names <- y.stats.transformed$var_name
+  y.names <- summary$var_name
   
   for (var_name in y.names) {
     
-    stats_extract <- y.stats.transformed[y.stats.transformed$var_name == var_name, ]
+    stats_extract <- summary[summary$var_name == var_name, ]
     
     if (!is.na(stats_extract$transformation)) { # If transformation took place
       
@@ -548,11 +547,12 @@ Plot_transformation <- function(
       # Combine plots and save
       g <- ggarrange(plotlist = list(g.raw, g.transformed))
       fn <- paste0("output_transf_hist_", var_name, ".png")
-      ggsave(filename = fn, plot = g, path = "./output/", width = 8, height = 4)
+      ggsave(filename = fn, plot = g, path = folder, width = 8, height = 4)
     }
   }
 }
 # ------------------------------------------------------------------------------------------------
+
 # ------------------------------------------------------------------------------------------------
 # Update the surv data according to landmark time
 # Change the time-varying variables in data.surv
@@ -565,10 +565,17 @@ Get_last_nonNA <- function(x) {
   }
 }
 
-Update_surv_at_landmark <- function(surv, long, y.names) {
+Update_surv_at_landmark <- function(surv, long, y.names, use_baseline) {
+  # Note: set use_baseline to TRUE for "glmnet-bl" methods
   
-  surv.mod <- surv %>%
+  surv.mod <- surv %>% # Copy original surv but drop the variables to be replaced
     select(-all_of(y.names))
+  
+  # Use baseline values from data.long instead of latest observed up to landmark
+  if (use_baseline) { 
+    long <- long %>%
+      filter(VISCODE == "bl")
+  }
   
   df.last_nonNA <- long %>% 
     group_by(id) %>%

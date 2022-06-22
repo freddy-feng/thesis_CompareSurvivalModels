@@ -1,7 +1,9 @@
 # ------------------------------------------------------------------------------------------------
 # Return a list of objects containing TP, FP, tdAUC
 # ------------------------------------------------------------------------------------------------
+require(tidyverse)
 require(survivalROC)
+
 
 Evaluate_tdauc <- function(
     surv.new, 
@@ -48,13 +50,15 @@ Evaluate_tdauc <- function(
 # ------------------------------------------------------------------------------------------------
 # Summarize tdAUC in different folds from folds.eval and output dataframe
 # ------------------------------------------------------------------------------------------------
-Summarize.tdAUC <- function(model, path, n_fold, detlaT) {
-  # Load results to folds.eval list for corresponding model
+Summarize.tdAUC <- function(name, path, detlaT) {
+  # Load folds.eval
   load(path)
+  
+  n_fold <- length(folds.eval)
   
   # Extract from folds.eval into list of tdAUC
   list.tdauc <- lapply(1:n_fold, function(i) {
-    deltaT.eval <- folds.eval[[i]]$perf$deltaT
+    deltaT.eval <- folds.eval[[i]]$perf$deltaT # in case deltaT in fold.eval > deltaT
     folds.eval[[i]]$perf$tdauc[deltaT.eval %in% detlaT]
   })
   
@@ -80,7 +84,15 @@ Summarize.tdAUC <- function(model, path, n_fold, detlaT) {
   
   df.tdauc$prediction_time <- as.numeric(df.tdauc$prediction_time)
   df.tdauc <- df.tdauc %>% arrange(prediction_time)
-  df.tdauc$model <- model
+  
+  # Get model information, identical over all folds
+  df.tdauc$model.id <- name # Different seed, different model name
+  df.tdauc$model.name <- folds.eval[[1]]$model.info$name
+  df.tdauc$method <- folds.eval[[1]]$model.info$hyperparam$method
+  df.tdauc$scenario <- folds.eval[[1]]$model.info$hyperparam$set_scenario
+  df.tdauc$landmark <- folds.eval[[1]]$model.info$hyperparam$landmark
+  df.tdauc$n_bl.covariate <- length(folds.eval[[1]]$model.info$covariate$base)
+  df.tdauc$bl.covariate <- paste(folds.eval[[1]]$model.info$covariate$base, collapse = "+")
   
   return(df.tdauc)
 }
@@ -100,7 +112,14 @@ Summarize.c.index <- function(model, path, n_fold) {
   
   # Convert list into data frame
   df.c.index <- data.frame(c.index = vec.c.index) # row i = fold i
-  df.c.index$model <- model
+  
+  # Get model information, identical over all folds
+  df.c.index$model <- folds.eval[[1]]$model.info$name
+  df.c.index$method <- folds.eval[[1]]$model.info$hyperparam$method
+  df.c.index$scenario <- folds.eval[[1]]$model.info$hyperparam$set_scenario
+  df.c.index$landmark <- folds.eval[[1]]$model.info$hyperparam$landmark
+  df.c.index$n_bl.covariate <- length(folds.eval[[1]]$model.info$covariate$base)
+  df.c.index$bl.covariate <- paste(folds.eval[[1]]$model.info$covariate$base, collapse = "+")
   
   return(df.c.index)
 }

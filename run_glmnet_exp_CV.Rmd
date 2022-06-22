@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 
 ```{r}
-source("function_utility_exp.R")
+source("function_utility.R")
 source("function_evaluation.R")
 
 source("function_glmnet_exp.R")
@@ -24,20 +24,36 @@ source("function_glmnet_exp.R")
 refer to folds template prepared in run_all_exp.rmd
 
 ```{r}
-rm("folds")
-rm("folds.eval")
-
-print(path.template)
-load(file = path.template)
-
-# Model param
-is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
+# -----------------------------------------------------------------------------------
+# Set model param
+is_scaled <- is_scaled # Set to "scaled" to scale covariates for LMMs
 is_transformed <- is_transformed
 landmark <- paste0("lm", T.start)
+n_basecov <- paste0("b", length(baseline.covs))
+glmnet.alpha <- 0 # 0 for ridge, 1 for lasso
 
-hyperparam <- paste(c(landmark, is_transformed, is_scaled), collapse = "_") # Use hyperparam to describe model
+penality.type <- if (glmnet.alpha == 0) {
+    "ridge"
+  } else if (glmnet.alpha == 1) {
+    "lasso"
+  } else {
+    "elasticnet"
+  }
 
-print(hyperparam)
+model.hyperparam <- list(
+  method = method,
+  set_scenario = set_scenario,
+  landmark = landmark,
+  is_scaled = is_scaled,
+  is_transformed = is_transformed,
+  glmnet.alpha = glmnet.alpha
+)
+
+hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled, penality.type), collapse = "_") # Use hyperparam to describe model
+model.name <- paste(c(method, landmark, hyperparam), collapse = "_")
+
+print(paste("Begin training for model:", model.name))
+# -----------------------------------------------------------------------------------
 ```
 
 
@@ -46,6 +62,12 @@ print(hyperparam)
 At this stage, folds list for cross validation should be initiated.
 
 ```{r}
+# -----------------------------------------------------------------------------------
+rm("folds")
+rm("folds.eval")
+
+print(path.template)
+load(file = path.template) # Load folds template
 # -----------------------------------------------------------------------------------
 # Fit models for each fold
 # -----------------------------------------------------------------------------------
@@ -82,19 +104,21 @@ for (i in 1:n_fold) {
     training.long = training.long,
     scenario = scenario,
     baseline.covs = baseline.covs,
-    baseline.covs.additional = baseline.covs.additional
+    baseline.covs.additional = baseline.covs.additional,
+    glmnet.alpha = glmnet.alpha
   )
   
   # -----------------------------------------------------------------------------------
   # Store results
   # -----------------------------------------------------------------------------------
-  folds[[i]]$glmnet <- list(
+  folds[[i]]$model <- list(
+    name = model.name,
+    hyperparam = model.hyperparam,
+    covariate = list(
+      base = res$covs.pcox),
     cvfit = res$cvfit,
-    covs.pcox = res$covs.pcox,
-    runtimes = res$runtimes,
-    is_scaled = is_scaled
+    training.time = res$runtimes
   )
-  # -----------------------------------------------------------------------------------
 }
 # -----------------------------------------------------------------------------------
 ```
@@ -106,6 +130,8 @@ for (i in 1:n_fold) {
 
 
 ```{r}
+# -----------------------------------------------------------------------------------
+# Test
 folds.eval <- vector(mode = "list", length = n_fold)
 
 for (i in 1:n_fold) {
@@ -113,47 +139,29 @@ for (i in 1:n_fold) {
   # General - Subset subjects for fold i
   # -----------------------------------------------------------------------------------
   tmp <- Get_train_test_data(
-    data.surv, data.long, 
-    folds[[i]]$ids.test,
-    is_scaled, 
-    folds[[i]]$scaling_table
-    )
+    data.surv = data.surv, 
+    data.long = data.long,  
+    ids.test = folds[[i]]$ids.test, 
+    is_scaled = is_scaled, 
+    scaling_table = folds[[i]]$scaling_table
+  )
   
   surv.new <- tmp$testing.surv
   long.new <- tmp$testing.long
-  
-  # testing.surv <- tmp$testing.surv
-  # testing.long <- tmp$testing.long
-  # ----------------------------------------------------------------------------------- 
-  # Landmarking -only consider subjects at risk at landmark time T.start
-#   ids.at_risk <- testing.surv %>% 
-#     filter(time > T.start) %>%
-#     select(id) %>%
-#     unlist(use.names = FALSE)
-#   
-#   surv.new <- testing.surv %>%
-#     filter(id %in% ids.at_risk)
-#   
-#   # Commented out this part to use all longitudinal information
-# #  long.new <- testing.long %>%
-# #    filter(id %in% ids.at_risk) %>%
-# #    filter(Years.bl <= T.start) # Filter long observations after landmark time
-#   long.new <- testing.long %>%
-#     filter(id %in% ids.at_risk)
-  
-#  print(paste("[Count] subject at risk at landmark", length(ids.at_risk)))
-  
+
   # -----------------------------------------------------------------------------------  
   # pCox - Evaluate model
   # ----------------------------------------------------------------------------------- 
   # Step 1 - prepare new X
   # Subset columns to construct model matrix on new data
-  covs.pcox <- folds[[i]]$glmnet$covs.pcox
+  covs.pcox <- folds[[i]]$model$covariate$base
   testing.x.covs <- surv.new %>%
     select(all_of(covs.pcox))
-  # Mean imputation
+  
+  # Mean imputation based on test data
+  # No information leakage
   testing.x.covs.imputed <- Imputate.x.mean(testing.x.covs)
-  # Model matrix, of dimension n obs x n vars; each row is an observation vector
+  # Convert data to model matrix
   testing.x.mat <- model.matrix(~ ., data = testing.x.covs.imputed)
   # Observed response
   testing.y <- survival::Surv(
@@ -163,7 +171,7 @@ for (i in 1:n_fold) {
   )
   # Step 2 - compute linear predictor
   linpred <- predict(
-    folds[[i]]$glmnet$cvfit, # Fitted "cv.glmnet" object
+    folds[[i]]$model$cvfit, # Fitted "cv.glmnet" object
     newx = testing.x.mat, # Matrix of new values for x at which predictions are to be made. Must be a matrix
     s = "lambda.min",
     type = "link" # Type "link" (default) returns x^T \beta
@@ -173,7 +181,7 @@ for (i in 1:n_fold) {
   # General - Compute tdROC and tdAUC, c-index
   # -----------------------------------------------------------------------------------
   res.tdauc <- Evaluate_tdauc(surv.new, linpred, T.start, deltaT)
-  res.c.naive <- survcomp::concordance.index(
+  res.c.index <- survcomp::concordance.index(
     x = linpred, # vector of risk predictions
     surv.time = surv.new$time, # vector of event times
     surv.event = surv.new$event, # vector of event occurence indicators
@@ -184,15 +192,21 @@ for (i in 1:n_fold) {
   # -----------------------------------------------------------------------------------
   # Store results
   # -----------------------------------------------------------------------------------
-#  folds.eval[[i]]$ids.test_no_missing <- ids.valid
+  # Performance
   folds.eval[[i]]$perf <- list(
     landmark = T.start,
     deltaT = deltaT,
-    c.index = res.c.naive$c.index,
+    c.index = res.c.index$c.index,
     tdauc = res.tdauc$tdauc,
     tp = res.tdauc$tp,
-    fp = res.tdauc$fp
-  )
+    fp = res.tdauc$fp)
+  # Carry over model information in case training model is not kept
+  folds.eval[[i]]$model.info <- list(
+      name = folds[[i]]$model$name,
+      hyperparam = folds[[i]]$model$hyperparam,
+      covariate = folds[[i]]$model$covariate,
+      training.time = folds[[i]]$model$training.time
+    )
   # -----------------------------------------------------------------------------------
 }
 ```
@@ -208,9 +222,11 @@ sd(cv.c.index) %>% round(3)
 ```
 
 ```{r}
+i <- 1
+
 # Estimated tdAUC for deltaT
 cv.tdauc <- data.frame(
-  deltaT = folds.eval[[1]]$perf$deltaT,
+  deltaT = folds.eval[[i]]$perf$deltaT,
   tdauc.fold = sapply(folds.eval, function(x) x$perf$tdauc) # row is fold, column is prediction window
 )
 
@@ -222,6 +238,7 @@ cv.tdauc %>%
   ggplot() + 
     geom_point(aes(x = deltaT, y = mean)) +
     geom_line(aes(x = deltaT, y = mean)) +
+    scale_x_continuous(breaks = deltaT) +
     scale_y_continuous(breaks = 0:10 / 10) +
     coord_cartesian(ylim = c(0, 1)) +
     xlab("Time since baseline") + ylab("cv tdAUC")
@@ -240,17 +257,20 @@ g
 
 ```{r}
 # Save evaluation result
-tmp <- paste0("./output/eval_", set_scenario, "_pCox_", hyperparam, "_seed", seed, ".RData")
-save(folds.eval, file = tmp)
+folder <- "./output/eval_"
+path.eval <- paste0(folder, model.name, "_seed", seed, ".RData")
 
-print(paste("Performance in folds saved to path:", tmp))
+save(folds.eval, file = path.eval)
+print(paste("Performance in folds saved:", path.eval))
 ```
 
-```{r}
+```{r, eval=FALSE}
 # [Optional] save model
-tmp <- paste0("./model/model_", set_scenario, "_pCox_", is_scaled, "_seed", seed, ".RData")
-save(folds, file = tmp)
+folder <- "./model/model_"
+path.model <- paste0(folder, model.name, "_seed", seed, ".RData")
 
-print(paste("Trainined models in folds saved to path:", tmp))
+save(folds, file = path.model)
+print(paste("Models in folds saved:", path.model))
+
 ```
 

@@ -1,36 +1,43 @@
 library(tidyverse)
 
-source("function_utility_exp.R")
+source("function_utility.R")
 source("function_evaluation.R")
 
 source("function_pencal_exp.R")
 
 select <- dplyr::select
-
+# -----------------------------------------------------------------------------------
 for (seed in 721:730) {
+  # -----------------------------------------------------------------------------------
+  method <- "pencal"
   # -----------------------------------------------------------------------------------
   # Set experiment parameters here!
   # -----------------------------------------------------------------------------------
-  n_fold <- 10 # Cross validation
   seed <- seed # Vary this for repeated CV
-  set_scenario <- "scenario2" # Determine how many longitudinal covariates to use
-  is_transformed <- "transformed"
+  print(paste("This CV will perform train-test split using seed", seed))
   
-#  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # Baseline covariates
-  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "APOE4") # Baseline covariates
+  n_fold <- 10 # Cross validation
+  
+  set_scenario <- "scenario2" # Determine how many longitudinal covariates to use
+  
+  is_transformed <- "transformed"
+  is_scaled <- "scaled"
+  
+  # Baseline covariates (not time-varying in adnimerge)
+    baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # b5 
+#  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "APOE4") # b4
   # -----------------------------------------------------------------------------------
   # -----------------------------------------------------------------------------------
   
   # -----------------------------------------------------------------------------------
   # Load data
   # -----------------------------------------------------------------------------------
-  # Contains two dataframes df.surv_preds and df.long_censored
-  path.data <- "adni_cleaned.RData"
+  # Load cleaned data
+  path.data <- "./data_cleaned/adni_cleaned.RData"
   load(path.data)
   
-  # may also reduce the number of columns here to reduce size
-  # Note: make sure data.surv and data.long are arranged by id and {id, age.fup}
-  # to ensure proper function with pencal package
+  # [future] may also reduce the number of columns here to reduce size
+  # Note: data.surv and data.long are arranged by id and {id, age.fup} to ensure properly use pencal
   data.surv <- df.surv_preds
   
   if (is_transformed == "transformed") {
@@ -38,25 +45,25 @@ for (seed in 721:730) {
   } else {
     data.long <- df.long_censored
   }
-  
-  ## Set up for evaluation
-  
+  # -----------------------------------------------------------------------------------
+  # Set up for landmarking and evaluation
+  # -----------------------------------------------------------------------------------
   # landmark time
   T.start <- 2
-  landmark <- paste0("lm", T.start)
-  # We can predict on years from (T.start + 1) up to T.max
+  landmark <- paste0("lm", T.start) # File name description
   
   T.max <- floor(max(data.surv$time)) # Based on last available observation in train set
-  # [Warning] forsee a potential bug may happen by chance if the longest observation is in test set, but not train
+  # [Warning] foresee a potential bug may happen by chance if the longest observation is in test set, but not train
   
   # Predict 15 years onward from landmark time, but not more than max observed time
   deltaT <- 1:T.max # A vector of prediction times, starting from baseline onward
   deltaT <- deltaT[deltaT > T.start]
   
-  # I need to change deltaT later because the notation is inconsistent with the symbol in paper
-  # the true delta T should be prediction time - landmark time!!!!!!!
+  # [Future] May need to change deltaT later because the notation is inconsistent with the symbol in paper
+  # the true delta T should be prediction time - landmark time! Avoid confusion!
   
-  print(paste("Evaluation on time since baseline =", paste(deltaT, collapse = " ")))
+  print(paste("[Report] Evaluation on times since baseline (time=0):", paste(deltaT, collapse = " ")))
+  # -----------------------------------------------------------------------------------
   
   # Select subjects at risk since landmark time
   data.surv <- data.surv %>%
@@ -76,76 +83,133 @@ for (seed in 721:730) {
   # -----------------------------------------------------------------------------------
   # Initialize
   # -----------------------------------------------------------------------------------
+  
+  
+  
   # Manual exclusion
-  # Type of TAU, PTAU and ABETA are character, need to handle non-numerical values first. currently excluded
   vars_manual_remove <- c("TAU", "PTAU", "ABETA")
+  # Note: Type of TAU, PTAU and ABETA are character
+  # need to handle non-numerical values first. currently excluded
   
   # Exclude irrelevant variables
   vars_irrelevant <- c(
-    names(data.long)[grepl(".bl", names(data.long))], # Exclude baselines, Years.bl, Month.bl
-    "RID", "time", "event", "status", "DX",
-    "VISCODE", "EXAMDATE", "Y", "M", "Month",
-    "AGE", "age.fup", "COLPROT", "ORIGPROT", "PTID", "SITE",
-    "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4",
-    "FSVERSION", "IMAGEUID", "FLDSTRENG"
+    names(data.long)[grepl(".bl", names(data.long))], # Exclude variables with `.bl` suffix including Years.bl and Months.bl
+    "id", "RID",
+    "time", "event", "status", "DX", # Survival information
+    "VISCODE", "EXAMDATE", "Y", "M", "Month", # Time variables
+    "AGE", "age.fup", 
+    "COLPROT", "ORIGPROT", "PTID", "SITE", # Visit information
+    "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4", # Baseline variables
+    "FSVERSION", "IMAGEUID", "FLDSTRENG" # Metadata for image
   )
   
   vars_ignore <- c(vars_manual_remove, vars_irrelevant) # Variables that will not be considered as long covariates
   
-  # Updating the time-varying covariates in data.surv according to landmark time
+  # -----------------------------------------------------------------------------------
+  # Update values of time-varying covariates in surv data when landmark time > 0
+  # for methods pCox-bl and pCox-lm
+  
+  # The original values observed at baseline i.e. VISCODE=="bl"
+  # are replaced by last observed value on or before landmark
+  
+  # Step 1: set the covariates to update, should cover the candidate long covariates
+  vars_long <- names(data.surv)[!(names(data.surv) %in% vars_ignore)]
+  
+  # Step 2: update values in surv data
   # For each subject, the latest observed value of time-varying covariate is used
-  # The value can be transformed or not, depending on data.long assignment
-  
-  # vars_candidate are the set of candidate long covariates BEFORE screening
-  vars_candidate <- names(data.surv)[!(names(data.surv) %in% c("id", vars_ignore))]
+  # The value can be transformed or not, depending on data.long chosen
+  use_baseline <- NULL
+  if (method == "pCox-bl" | method == "pCox-lm") {
+    
+    if (method == "pCox-bl") {
+      use_baseline = TRUE
+    } else {
+      use_baseline = FALSE
+    }
+    
+    data.surv <- Update_surv_at_landmark(
+      surv = data.surv,
+      long = data.long,
+      y.names = vars_long,
+      use_baseline = use_baseline)
+    
+    print("[Remind] pCox method is used, the additional covariates will be updated")
+  }
   
   # -----------------------------------------------------------------------------------
-  # Update landmark value
-  # Can it be speed up?
-  data.surv <- Update_surv_at_landmark(
-    surv = data.surv, 
-    long = data.long, 
-    y.names = vars_candidate)
+  # Obtain a list of folds to initialize cross validation
+  # Involves:
+  # - Select candidate longitudinal covariates based on missingness
+  # - Create folds based on stratified train-test split for n-fold CV
   
-  # -----------------------------------------------------------------------------------
+  # Get scaling table
   folds <- Initialize_exp(
     data.surv = data.surv,
     data.long = data.long,
     baseline.covs = baseline.covs,
-    vars_ignore = vars_ignore,
+    vars_not_long = vars_ignore,
     set_scenario = set_scenario,
     n_fold = n_fold,
     seed = seed
   )
-  # Get scaling table
-  # Note: depends on is_transformed, different set of data.long will be used, hence different scaling factor will be determined
   
-  #Check_folds(data.surv, folds) # Checking the split process, stratification
+  # Note: depending on `is_transformed`, either original or transformed version of data.long will be used
+  # the different scaling parameters are different between these cases
   
-  path.template <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
+  # -----------------------------------------------------------------------------------
+  
+  # -----------------------------------------------------------------------------------
+  # Save folds for training and future checking
+  subfolder <- "./output/temp/"
+  filename <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
+  path.template <- paste0(subfolder, filename)
   
   save(folds, file = path.template)
   
   print(paste("template of folds saved to path:", path.template))
+  
+  # -----------------------------------------------------------------------------------
+  # You may want to double check data.long and data.surv before proceeding to training.
+  # Note that the values in data.surv may be changed in landmarking step.
+  # Scaling will be carried out in training step.
+  
+  #Check_folds(data.surv, folds) # Uncomment to check the stratification / class balance after split
+  
+  
+  # -----------------------------------------------------------------------------------
+  # -----------------------------------------------------------------------------------
+  # Set model param
+  
+  is_transformed <- is_transformed
+  is_scaled <- is_scaled # Set to "scaled" to scale covariates for LMMs
+  is_standardized <- "std" # Refer to step 3 of pencal, standardizing the random effects summary
+  
+  penalty <- "ridge"
+  
+  landmark <- paste0("lm", T.start)
+  n_basecov <- paste0("b", length(baseline.covs))
+  
+  model.hyperparam <- list(
+    method = method,
+    set_scenario = set_scenario,
+    landmark = landmark,
+    is_scaled = is_scaled,
+    is_transformed = is_transformed,
+    is_standardized = is_standardized,
+    penalty = penalty
+  )
+  
+  hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled, is_standardized, penalty), collapse = "_") # Use hyperparam to describe model
+  model.name <- paste(c(method, landmark, hyperparam), collapse = "_")
+  
+  print(paste("Begin training for model:", model.name))
+  # -----------------------------------------------------------------------------------
   # -----------------------------------------------------------------------------------
   rm("folds")
   rm("folds.eval")
   
-  # Initialize fold
   print(path.template)
-  load(file = path.template)
-  
-  # Model param
-  penalty <- "ridge"
-  is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
-  is_standardized <- "std" # Refer to step 3 of pencal, standardizing the random effects summary
-  is_transformed <- is_transformed
-  landmark <- paste0("lm", T.start)
-  
-  hyperparam <- paste(c(landmark, is_transformed, is_scaled, is_standardized, penalty), collapse = "_") # Use hyperparam to describe model
-  
-  print(hyperparam)
-  
+  load(file = path.template) # Load folds template
   # -----------------------------------------------------------------------------------
   # Fit models in CV loop
   # -----------------------------------------------------------------------------------
@@ -186,21 +250,19 @@ for (seed in 721:730) {
     # -----------------------------------------------------------------------------------
     # pencal - Store results
     # -----------------------------------------------------------------------------------
-    folds[[i]]$pencal <- list(
+    folds[[i]]$model <- list(
+      name = model.name,
+      hyperparam = model.hyperparam,
+      covariate = list(
+        base = folds[[i]]$baseline.covs,
+        long = folds[[i]]$candidate.long.covs),
       step1 = res$step1,
       step2 = res$step2,
       step3 = res$step3,
-      runtimes = res$runtimes,
-      hyperparam = list(
-        penalty = penalty,
-        is_scaled = is_scaled,
-        is_standardized = is_standardized
-      )
+      training.time = res$runtimes
     )
-    # -----------------------------------------------------------------------------------
   }
   # -----------------------------------------------------------------------------------
-  
   # Initialize result
   folds.eval <- vector(mode = "list", length = n_fold)
   
@@ -222,35 +284,13 @@ for (seed in 721:730) {
     surv.new <- tmp$testing.surv
     long.new <- tmp$testing.long 
     
-    
-    # testing.surv <- tmp$testing.surv
-    # testing.long <- tmp$testing.long
-    # ----------------------------------------------------------------------------------- 
-    #   # Landmarking -only consider subjects at risk at landmark time T.start
-    #   ids.at_risk <- testing.surv %>% 
-    #     filter(time > T.start) %>%
-    #     select(id) %>%
-    #     unlist(use.names = FALSE)
-    #   
-    #   surv.new <- testing.surv %>%
-    #     filter(id %in% ids.at_risk)
-    #   
-    #   # Commented out this part to use all longitudinal information
-    # #  long.new <- testing.long %>%
-    # #    filter(id %in% ids.at_risk) %>%
-    # #    filter(Years.bl <= T.start) # Filter long observations after landmark time
-    #   long.new <- testing.long %>%
-    #     filter(id %in% ids.at_risk)
-    #   
-    #  print(paste("[Count] subject at risk at landmark", length(ids.at_risk)))
-    
     # -----------------------------------------------------------------------------------  
     # pencal - Evaluate model
     # ----------------------------------------------------------------------------------- 
     # Extract fitted models
-    step1 <- folds[[i]]$pencal$step1
-    step2 <- folds[[i]]$pencal$step2
-    step3 <- folds[[i]]$pencal$step3
+    step1 <- folds[[i]]$model$step1
+    step2 <- folds[[i]]$model$step2
+    step3 <- folds[[i]]$model$step3
     
     # Obtain predicted random effect
     # res object comes from fitted pencal
@@ -289,13 +329,11 @@ for (seed in 721:730) {
     )
     # -----------------------------------------------------------------------------------
     
-    
-    
     # -----------------------------------------------------------------------------------
     # General - Compute tdROC and tdAUC, c-index
     # -----------------------------------------------------------------------------------
     res.tdauc <- Evaluate_tdauc(surv.new, linpred, T.start, deltaT)
-    res.c.naive <- survcomp::concordance.index(
+    res.c.index <- survcomp::concordance.index(
       x = linpred, # vector of risk predictions
       surv.time = surv.new$time, # vector of event times
       surv.event = surv.new$event, # vector of event occurence indicators
@@ -306,21 +344,29 @@ for (seed in 721:730) {
     # -----------------------------------------------------------------------------------
     # Store results
     # -----------------------------------------------------------------------------------
-    #  folds.eval[[i]]$ids.test_no_missing <- ids.valid
+    # Performance
     folds.eval[[i]]$perf <- list(
       landmark = T.start,
       deltaT = deltaT,
-      c.index = res.c.naive$c.index,
+      c.index = res.c.index$c.index,
       tdauc = res.tdauc$tdauc,
       tp = res.tdauc$tp,
       fp = res.tdauc$fp
     )
+    # Carry over model information in case training model is not kept
+    folds.eval[[i]]$model.info <- list(
+      name = folds[[i]]$model$name,
+      hyperparam = folds[[i]]$model$hyperparam,
+      covariate = folds[[i]]$model$covariate,
+      training.time = folds[[i]]$model$training.time
+    )
     # -----------------------------------------------------------------------------------
   }
-  
-  
+  # -----------------------------------------------------------------------------------
   # Save evaluation result
-  tmp <- paste0("./output/eval_", set_scenario, "_pencal_", hyperparam, "_seed", seed, ".RData")
-  save(folds.eval, file = tmp)
-  print(paste("folds.eval saved to path:", tmp))
+  folder <- "./output/eval_"
+  path.eval <- paste0(folder, model.name, "_seed", seed, ".RData")
+  
+  save(folds.eval, file = path.eval)
+  print(paste("Performance in folds saved:", path.eval))
 }

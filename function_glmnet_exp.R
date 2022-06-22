@@ -89,7 +89,9 @@ Train_glmnet <- function(
     training.long,
     scenario,
     baseline.covs,
-    baseline.covs.additional
+    baseline.covs.additional,
+    baseline.covs.additional.type, # Choose between baseline or latest observed til landmark time
+    glmnet.alpha
   ) {
   # -----------------------------------------------------------------------------------
   # pCox - prepare data
@@ -130,7 +132,7 @@ Train_glmnet <- function(
     x = training.x.mat,
     y = training.y,
     family = "cox",
-    alpha = 1, # Hyperparam
+    alpha = glmnet.alpha, # 0 for lasso (default), 1 for ridge
     nfolds = 10, # Hyperparam
     type.measure = "C" # Harrel's concordance, only available for cox models
   )
