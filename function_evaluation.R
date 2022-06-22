@@ -23,21 +23,32 @@ Evaluate_tdauc <- function(
     predict.time <- deltaT[j]
     
 #    print(predict.time)
-    
-    temp <- survivalROC::survivalROC(
-      Stime = surv.new$time, # Event time or censoring time for subjects
-      status = surv.new$event, # Indicator of status, 1 if death or event, 0 otherwise
-      marker = linpred, # Predictor or marker value
-      entry = NULL, # Entry time for the subjects, default is NULL, why 0?
-      predict.time = predict.time, # Time point of the ROC curve
-      cut.values = NULL, # marker values to use as a cut-off for calculation of sensitivity and specificity
-      method = "NNE", 
-      span = 0.25 * nrow(surv.new)^(-0.2) # small span yield moderate smoothing, how to select?
-    )
-    
-    res.tdauc[j] <- temp$AUC
-    res.tp[[j]] <- temp$TP
-    res.fp[[j]] <- temp$FP
+    event.times <-surv.new$time[surv.new$event == 1]
+    if (all(!(event.times <= predict.time))) {
+      mess <- paste(
+        "No event (surv.new$event == 1) is observed between landmark time", T.start, 
+        "and prediction time", predict.time)
+      warning(mess)
+      # Store no result
+      res.tdauc[j] <- NA
+      res.tp[[j]] <- NA
+      res.fp[[j]] <- NA
+    } else {
+      temp <- survivalROC::survivalROC(
+        Stime = surv.new$time, # Event time or censoring time for subjects
+        status = surv.new$event, # Indicator of status, 1 if death or event, 0 otherwise
+        marker = linpred, # Predictor or marker value
+        entry = NULL, # Entry time for the subjects, default is NULL, why 0?
+        predict.time = predict.time, # Time point of the ROC curve
+        cut.values = NULL, # marker values to use as a cut-off for calculation of sensitivity and specificity
+        method = "NNE", 
+        span = 0.25 * nrow(surv.new)^(-0.2) # small span yield moderate smoothing, how to select?
+      )
+      # Store result
+      res.tdauc[j] <- temp$AUC
+      res.tp[[j]] <- temp$TP
+      res.fp[[j]] <- temp$FP
+    }
   }
   
   return(list(
