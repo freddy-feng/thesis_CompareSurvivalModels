@@ -270,6 +270,11 @@ uPACE = function(testData, domain, predData = NULL, nbasis = 10, pve = 0.95, npc
   }
   
   res = PACE(tmp, tmp2, pve = pve, npc = npc, nbasis=nbasis)
+  # This function calculates a univariate functional principal components analysis by smoothed covariance based on code from fpca.sc in package refund.
+  # tmp: An object of class funData or irregFunData containing the functional data observed, for which the functional principal component analysis is calculated. If the data is sampled irregularly (i.e. of class irregFunData), funDataObject is transformed to a funData object first.
+  # tmp2: An object of class funData, for which estimated trajectories based on a truncated Karhunen-Loeve representation should be estimated. Defaults to NULL, which implies prediction for the given data.
+  # pve: proportion of variance explained: used to choose the number of principal components.
+  # nbasis: An integer, representing the number of B-spline basis functions used for estimation of the mean function and bivariate smoothing of the covariance surface.  
   
   return(res)
 }
@@ -277,12 +282,12 @@ uPACE = function(testData, domain, predData = NULL, nbasis = 10, pve = 0.95, npc
 # multivariate FPCA based on results from uPACE
 mFPCA = function(Xi, phi, p , L, I){
   
-  # eigenanalysis on matrix M
+  # eigenanalysis on matrix M (or H mentioned in paper) = (n-1)^{-1} \Theta^T \Theta
   M = t(Xi)%*%Xi/(I-1)
   eigen.M = eigen(M)
-  values = eigen.M$values
-  pve = cumsum(values)/sum(values)
-  Cms = eigen.M$vectors
+  values = eigen.M$values # eigenvalues
+  pve = cumsum(values)/sum(values) # percentage of variance explained
+  Cms = eigen.M$vectors # eigenvectors
   index = unlist(lapply(1:length(L), function(x) rep(x, L[x])))
   
   # MFPCA score

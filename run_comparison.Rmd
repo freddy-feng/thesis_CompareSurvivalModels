@@ -43,15 +43,38 @@ models.path <- models.path[grepl(pattern = "eval_", x = models.path)]
 
 # Filter by landmark
 #models.path <- models.path[grepl(pattern = "lm2", x = models.path) | grepl(pattern = "lm0", x = models.path)] # Chose landmark
+
+
 models.name <- stringr::str_remove_all(stringr::str_remove_all(models.path, ".RData"), "eval_")
 
 #models.name
 ```
 
 
-# Present result - tdAUC
 
-## Consolidate fold.evals to data frame
+```{r, eval=FALSE}
+# Load single result
+
+
+load(file = paste0(folderpath, "eval_pencal_lm2_scenario2_b5_transformed_scaled_std_ridge_seed730.RData")
+folds.eval[[1]]$model.info$covariate
+
+# print the covariates and get data dic
+# data dic is not complete
+temp <- get_datadic(folds.eval[[1]]$model.info$covariate$base) %>% unite(FLDNAME, TEXT, col = "new", sep = " & ") %>% select(new) %>% arrange(new)
+temp2 <- get_datadic(folds.eval[[1]]$model.info$covariate$long) %>% unite(FLDNAME, TEXT, col = "new", sep = " & ") %>% select(new) %>% arrange(new)
+temp3 <- temp %>% add_row(temp2)
+
+temp3
+temp3$new <- paste0(temp3$new, " \\\\")
+write.csv(temp3, "./test.txt", row.names = FALSE)
+
+```
+
+
+# tdAUC
+
+## Consolidate
 ```{r, fig.width=8, fig.height=4}
 # ------------------------------------------------------------------------------------------------
 # Summarize tdAUC results
@@ -62,17 +85,24 @@ df.tdauc.compare <- data.frame()
 T.start <- 2
 deltaT <- 1:15
 deltaT <- deltaT[deltaT > T.start]
+
+is_lm <- grepl(models.name, pattern = paste0("lm", T.start))
+models.name.valid <- models.name[is_lm]
+models.path.valid <- models.path[is_lm]
 # ------------------------------------------------------------------------------------------------
 
 # Repeat the following steps for different models
 
-for (i in 1:length(models.name)) {
-
+for (i in 1:length(models.name.valid)) {
+  
+  name <- models.name.valid[i]
+  path <- models.path.valid[i]
+    
   if (i == 1) {
     # For first model to initialize dataframe
     df.tdauc <- Summarize.tdAUC(
-      name = models.name[i],
-      path = paste0(folderpath, models.path[i]),
+      name = name,
+      path = paste0(folderpath, path),
       detlaT = deltaT
       )
     
@@ -81,8 +111,8 @@ for (i in 1:length(models.name)) {
 
   # Result i, i > 1
   df.tdauc <- Summarize.tdAUC(
-    name = models.name[i],
-    path = paste0(folderpath, models.path[i]),
+    name = name,
+    path = paste0(folderpath, path),
     detlaT = deltaT
     )
   
@@ -92,6 +122,11 @@ for (i in 1:length(models.name)) {
 }
 
 df.tdauc.compare %>% head()
+```
+
+```{r}
+# List all models
+unique(df.tdauc.compare$model.name)
 ```
 
 
@@ -289,6 +324,7 @@ df.tdauc.compare %>%
             .groups = "drop") %>%
   mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
   filter(method == "pCox-lm" | method == "pencal") %>%
+  filter(n_bl.covariate == 26 | n_bl.covariate == 5) %>%
   ggplot(aes(
     x = prediction_time, 
     y = repeated.CV.mean, 
@@ -317,6 +353,22 @@ df.tdauc.compare %>%
   theme_minimal()
 ```
 
+
+```{r}
+df.tdauc.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  filter(method == "pCox-lm" | method == "pencal")
+```
+
+
 ```{r}
 df.tdauc.compare %>% 
   filter(scenario == "scenario2") %>%
@@ -331,7 +383,7 @@ df.tdauc.compare %>%
 ```
 
 
-## Plot to compare different baseline covariates for pCox
+## Compare different baseline covariates for pCox
 ```{r, fig.width=6, fig.height=4}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
@@ -365,7 +417,7 @@ df.tdauc.compare %>%
   
 ```
 
-## Plot to compare different baseline covariates for pencal at lm2, scenario2
+## Compare different baseline covariates for pencal at lm2, scenario2
 ```{r, fig.width=8, fig.height=4}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
@@ -403,36 +455,10 @@ df.tdauc.compare %>%
 
 
 
-## Plot tdAUC for scenario 1 or 2 separately:
-```{r}
-# ------------------------------------------------------------------------------------------------
-# Plot df.tdauc.compare
-# ------------------------------------------------------------------------------------------------
-df.tdauc.compare %>%
-  filter(grepl(model, pattern = "scenario1")) %>% # Comment out to show all
-  ggplot(aes(
-    x = prediction_time, 
-    y = mean, 
-    group = model,
-    color = model)) +
-#  geom_errorbar(aes(
-#    ymax = ci.upper,
-#    ymin = ci.lower),
-#    alpha = 0.3,
-#    width = 0.3, size = 0.8) + 
-    geom_point() +
-    geom_line(aes(linetype = method), size = 1, alpha = 0.3) +
-    scale_x_continuous(breaks = deltaT) + 
-    scale_y_continuous(breaks = 0:10 / 10) +
-    coord_cartesian(ylim = c(0.5, 1)) +
-    xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
-    labs(
-      title = "Comparison of estimated tdAUC under 10-fold CV",
-      subtitle = paste("at landmark time", T.start),
-      caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
-    )  +
-    theme_minimal()
+## tdAUC for one scenario only:
 
+for scenario2
+```{r}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
 # ------------------------------------------------------------------------------------------------
@@ -463,7 +489,41 @@ df.tdauc.compare %>%
   theme_minimal()
 ```
 
-## Plot scaled and MFPCCox only:
+for scenario0
+```{r}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>%
+  filter(grepl(model, pattern = "scenario0")) %>% # Comment out to show all
+  ggplot(aes(
+    x = prediction_time, 
+    y = mean, 
+    group = model,
+    color = model)) +
+#  geom_errorbar(aes(
+#    ymax = ci.upper,
+#    ymin = ci.lower),
+#    alpha = 0.3,
+#    width = 0.3, size = 0.8) + 
+    geom_point() +
+    geom_line(aes(linetype = method), size = 1, alpha = 0.3) +
+    scale_x_continuous(breaks = deltaT) + 
+    scale_y_continuous(breaks = 0:10 / 10) +
+    coord_cartesian(ylim = c(0.5, 1)) +
+    xlab("Year from baseline") + ylab("time-dependent AUC\n(higher is better)") +
+    labs(
+      title = "Comparison of estimated tdAUC under 10-fold CV",
+      subtitle = paste("at landmark time", T.start),
+      caption = "Error bar represents the pointwise interval at 2.5% and 97.5%"
+    )  +
+    theme_minimal()
+
+
+```
+
+
+## [not used] Plot scaled and MFPCCox only:
 ```{r, fig.width=8}
 # ------------------------------------------------------------------------------------------------
 # Plot df.tdauc.compare
@@ -499,6 +559,7 @@ df.tdauc.compare %>%
 
 # C index 
 
+## Consolidate
 ```{r, fig.width=8}
 # ------------------------------------------------------------------------------------------------
 # Summarize C-index results
@@ -537,7 +598,7 @@ for (i in 1:length(models.name)) {
 
 ```
 
-Plot the c-index 
+## Plot the c-index 
 ```{r, fig.width=8}
 # ------------------------------------------------------------------------------------------------
 # Plot df.c.index.compare

@@ -9,6 +9,10 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+In this notebook, I copied the example from Kan Li's MFPCCox example on github.
+I made minimal changes including adjusting it to use my adapted function_MFPCCox.
+
+
 # dependencies 
 ```{r}
 rm(list=ls())
@@ -45,7 +49,7 @@ select <- dplyr::select
 # 
 #####################################################
 
-source("MFPCCox_functions.R")
+source("C:/Users/ybfen/Documents/GitHub/thesis_CompareSurvivalModels//function_MFPCCox.R") # Do not recommend to use source! Not robust.
 ```
 
 I copied all functions here for understanding each function
@@ -290,109 +294,7 @@ sim_mjm_nonlinear = function(I, J=8,  obstime = c(0,3,6,9,12,15, 18,21), miss = 
 }
 ```
 
-## uPACE
-```{r}
-# univariate FPCA via principal analysis by conditional estimation(PACE)
-uPACE = function(testData, domain, predData=NULL, nbasis = 10, pve = 0.95, npc = NULL){
 
-  tmp = funData(domain, testData)
-  
-  if (is.null(predData)){
-    tmp2 = NULL
-  } else {
-    tmp2 = funData(domain, predData)
-  }
-  
-  res = PACE(tmp, tmp2, pve=pve, npc= npc, nbasis=nbasis)
-  # This function calculates a univariate functional principal components analysis by smoothed covariance based on code from fpca.sc in package refund.
-  # tmp: An object of class funData or irregFunData containing the functional data observed, for which the functional principal component analysis is calculated. If the data is sampled irregularly (i.e. of class irregFunData), funDataObject is transformed to a funData object first.
-  # tmp2: An object of class funData, for which estimated trajectories based on a truncated Karhunen-Loeve representation should be estimated. Defaults to NULL, which implies prediction for the given data.
-  # pve: proportion of variance explained: used to choose the number of principal components.
-  # nbasis: An integer, representing the number of B-spline basis functions used for estimation of the mean function and bivariate smoothing of the covariance surface.  
-  
-  return(res)
-} 
-```
-
-## mFPCA
-```{r}
-# multivariate FPCA using results from uPACE
-mFPCA = function(Xi, phi, p , L){
-  
-  # eigenanalysis on matrix M (or H mentioned in paper)
-  M = t(Xi)%*%Xi/(I-1)
-  eigen.M = eigen(M)
-  values = eigen.M$values # eigenvalues
-  pve = cumsum(values)/sum(values) # percentage of variance explained
-  Cms = eigen.M$vectors # eigenvectors
-  index = unlist(lapply(1:length(L), function(x) rep(x, L[x])))
-  
-  # MFPCA score
-  rho = mfpca.score(Xi, Cms)
-  
-  # MFPCA eigenfunction
-  psis = NULL
-  for(j in 1:p){
-    psi = NULL
-    for(m in 1:dim(Cms)[2]){
-      psi = cbind(psi, phi[[j]]%*%Cms[which(index==j),m])
-    }
-    psis[[j]] = psi
-  }
-  
-  out = list(eigenvalue = values, Cms = Cms, pve = pve, index=index, rho = rho, psis=psis)
-  
-  return(out)
-}
-```
-
-## mfpc score calculation
-```{r}
-# mfpc score calculation
-mfpca.score = function(predXi, Cms){
-  
-  rho = matrix(NA, nrow = nrow(predXi), ncol=dim(Cms)[2])
-  
-  for(i in 1:nrow(predXi)){
-    for(m in 1:dim(Cms)[2]){
-      rho[i,m] = predXi[i,]%*%Cms[,m]
-    }
-  }
-  
-  return(rho)
-}
-```
-
-## trajectories prediction by MFPC
-```{r}
-# mfpc trajectories prediction
-mfpca.pred = function(score, meanf, psi, n.rho=NULL){
-  p = length(psi)
-  n = nrow(score)
-  
-  if(is.null(n.rho)){
-    n.rho = ncol(score)
-  }
-  
-  pred = array(NA, c(n, length(meanf[[1]]), p))
-  for(m in 1:p){
-    pred[,,m] = matrix(meanf[[m]], nrow=n, ncol =length(meanf[[m]]), byrow = T ) + score[,1:n.rho]%*%t(psi[[m]][, 1:n.rho])
-  }
-  
-  out = pred
-  return(out)
-}
-```
-
-## conditional survival probability
-```{r}
-# conditional survival probability
-cond.prob = function(model, newdata, Tstart, Tpred){
-  risk.Tstart = as.numeric(summary(survfit(model, newdata = newdata, se.fit = F, conf.int = F), times = Tstart)$surv)
-  risk.Tpred = as.numeric(summary(survfit(model, newdata = newdata, se.fit = F, conf.int = F), times = Tpred)$surv)
-  return(risk.Tpred/risk.Tstart)
-}
-```
 
 ## Functions for R package tdROC
 ```{r}
@@ -662,7 +564,7 @@ surv = data$surv  # survival data
 #View(long %>% head()) # Inspect simulated data
 ```
 
-```{r}
+```{r, eval=FALSE}
 # Modify long data to include NA values
 
 # NA value
@@ -760,7 +662,7 @@ for(p in 1:3){ # TO BE GENERALIZED, p is variable
 ## multivariate FPCA
 ```{r}
 # multivariate FPCA
-mFPCA.train = mFPCA(Xi=Xi.train, phi=phi.train, p=3, L=L) # TO BE GENERALIZED, p is variable
+mFPCA.train = mFPCA(Xi=Xi.train, phi=phi.train, p=3, L=L, I=I) # TO BE GENERALIZED, p is variable
 rho.train = mFPCA.train$rho # MFPC scores
 pve = mFPCA.train$pve
 psi = mFPCA.train$psi

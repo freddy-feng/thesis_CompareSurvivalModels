@@ -8,13 +8,19 @@
 # Dependencies
 # -----------------------------------------------------------------------------
 #rm(list = ls())
-require(tidyverse)
-require(ADNIMERGE) # Install from tar ball separately
-require(moments)
+library(tidyverse)
 
-source("function_utility_exp.R")
+library(moments)
+library(consort)
+
+library(ADNIMERGE) # Install from tar ball separately
+
+source("function_utility.R")
 # -----------------------------------------------------------------------------
 
+# Get all ids for consort diagram
+consort.id.raw <- sort(unique(adnimerge$RID))
+n_subjects <- length(consort.id.raw)
 # -----------------------------------------------------------------------------
 # Data cleaning and preprocessing
 # -----------------------------------------------------------------------------
@@ -28,6 +34,14 @@ ids_one_visit <- adnimerge %>%
   unlist(use.names = FALSE)
 
 paste("[Count] Subjects with single visit only =", length(ids_one_visit))
+
+is_single_visit <- consort.id.raw %in% ids_one_visit
+consort.id.singlevisit <- rep(NA, n_subjects) # Initialize
+consort.id.singlevisit[is_single_visit] <- "Single visit only" # Reason for exclusion
+consort.id.interim1 <- consort.id.raw # Initialize
+consort.id.interim1[is_single_visit] <- NA # To next step
+
+#paste("[Count] Subjects removed from previous =", sum(!is.na(consort.id.singlevisit)))
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -39,6 +53,15 @@ ids_DXbl_NA <- adnimerge %>%
   unlist(use.names = FALSE)
 
 paste("[Count] Subjects with DX==NA at baseline =", length(ids_DXbl_NA))
+
+is_DXbl_NA <- consort.id.interim1 %in% ids_DXbl_NA
+consort.id.DXbl_NA <- rep(NA, n_subjects) # Initialize
+consort.id.DXbl_NA[is_DXbl_NA] <- "No baseline diagnosis" # Reason for exclusion
+consort.id.interim2 <- consort.id.interim1
+consort.id.interim2[is_DXbl_NA] <- NA
+
+#paste("[Count] Subjects removed from previous =", sum(!is.na(consort.id.DXbl_NA)))
+
 # -----------------------------------------------------------------------------
 
 
@@ -51,7 +74,35 @@ ids_DXbl_Dem <- adnimerge %>%
   unlist(use.names = FALSE)
 
 paste("[Count] Subjects with DX==Dementia at baseline =", length(ids_DXbl_Dem))
+
+is_DXbl_Dem <- consort.id.interim2 %in% ids_DXbl_Dem
+consort.id.DXbl_Dem <- rep(NA, n_subjects) # Initialize
+consort.id.DXbl_Dem[is_DXbl_Dem] <- "Diagnosed as dementia at baseline" # Reason for exclusion
+consort.id.interim3 <- consort.id.interim2
+consort.id.interim3[is_DXbl_Dem] <- NA
+
+#paste("[Count] Subjects removed from previous =", sum(!is.na(consort.id.DXbl_Dem)))
+
 # -----------------------------------------------------------------------------
+ids_DX_allNA <- df.clean %>%
+  filter(VISCODE != "bl") %>%
+  group_by(RID) %>%
+  dplyr::summarise(
+    all_DX_NA = all(is.na(DX))
+  ) %>% 
+  filter(all_DX_NA == TRUE) %>%
+  select(RID) %>%
+  unlist(use.names = FALSE)
+
+paste("[Count] Subjects without any DX after baseline", length(ids_DX_allNA))
+
+is_DX_allNA <- consort.id.interim3 %in% ids_DX_allNA
+consort.id.DX_allNA <- rep(NA, n_subjects) # Initialize
+consort.id.DX_allNA[is_DX_allNA] <- "No diagnosis after baseline" # Reason for exclusion
+consort.id.interim4 <- consort.id.interim3
+consort.id.interim4[is_DX_allNA] <- NA
+
+#paste("[Count] Subjects removed from previous =", sum(!is.na(consort.id.DX_allNA)))
 
 # -----------------------------------------------------------------------------
 vars_baseline <- c("AGE", "PTGENDER", "PTEDUCAT", "PTETHCAT", "PTRACCAT", "PTMARRY", "APOE4")
@@ -67,14 +118,22 @@ ids_base_NA <- lapply(vars_baseline, function(x) {
               x, " =", length(ids_NA)))
   return (ids_NA)
 })
+
+is_no_basecov <- consort.id.interim4 %in% Reduce(union, ids_base_NA)
+consort.id.no_basecov <- rep(NA, n_subjects) # Initialize
+consort.id.no_basecov[is_no_basecov] <- "NA(s) in baseline covariate(s)" # Reason for exclusion
+consort.id.interim5 <- consort.id.interim4
+consort.id.interim5[is_no_basecov] <- NA
+
+#paste("[Count] Subjects removed from previous =", sum(!is.na(consort.id.no_basecov)))
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Construct union of subjects to exclude
 #ids_exclude <- union(union(ids_one_visit, ids_DXbl_Dem), ids_DXbl_NA)
 ids_exclude <- Reduce(union, 
-                      c(ids_base_NA, list(ids_one_visit, ids_DXbl_Dem, ids_DXbl_NA)))
-paste("[Count] Subjects to be excluded due to single visit or DX==AD/NA at baseline =", 
+                      c(ids_base_NA, list(ids_one_visit, ids_DXbl_Dem, ids_DXbl_NA, ids_DX_allNA)))
+paste("[Count] Subjects to be excluded due to single visit or DX==AD/NA at baseline or no DX after baseline =", 
       length(ids_exclude))
 # -----------------------------------------------------------------------------
 
@@ -115,22 +174,25 @@ for (x in vars_factorize){
 
 # Event is DX==Dementia from non-dementia at the EARLIEST follow-up time
 df.dementia <- df.clean %>%
-  filter(DX == "Dementia", 
-         VISCODE != "bl") %>% # Dementia after baseline
+  filter(DX == "Dementia", VISCODE != "bl") %>% # Redundant step to filter Dementia after baseline, already done in previous step
   group_by(RID) %>%
   dplyr::summarize(
     time = min(Years.bl), # Earliest follow up time in years from baseline
     event = 1)
 
+#paste("[Count] Subjects removed from previous =", sum(!is.na(consort.id.no_basecov)))
+
 # DX==non-Dementia at LATEST follow up time
+
+# Temp part to check the filter DX==NA
 df.censored <- df.clean %>%
-  filter(!(RID %in% df.dementia$RID), 
-         VISCODE != "bl") %>% # Exclude subjects with event, exclude baseline
-  filter(!(is.na(DX))) %>% # Non-NA, DX should be either CN or MCI
+  filter(!(RID %in% df.dementia$RID), VISCODE != "bl") %>% # Censored outcome after baseline
+#  filter(!(is.na(DX))) %>% # Non-NA, DX should be either CN or MCI
   group_by(RID) %>%
   dplyr::summarize(
     time = max(Years.bl), # Latest follow up in years from baseline
     event = 0) # Censored can be CN or MCI, at latest follow up
+
 
 # Merge event and censored {RID, time, status}
 # Basic layout of surv data layout, without predictors
@@ -233,8 +295,9 @@ print("[Report] Manually removed observation in subject 6014, VISCODE `m0`. Beca
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
-# Prepare df.long_censored: remove observations at or after event
-# Prepare df.long_censored by filtering
+# Prepare df.long_censored: remove observations at or after outcome
+# Should we keep observations at outcome? Make sure information or condition after event is not included in long data
+# In other words, to ensure the long data represent the same state
 df.long_censored <- df.long %>% 
   filter(time > Years.bl)
 # -----------------------------------------------------------------------------
@@ -292,6 +355,50 @@ Plot_transformation(
 
 df.long_censored_transformed <- res.transformation$data.long.transformed
 transformation_summary <- res.transformation$summary
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Consort diagram to describe exclusion of subjects
+df.consort <- data.frame(
+  consort.id.raw,
+  consort.id.singlevisit, 
+  consort.id.interim1,
+  consort.id.DXbl_NA,
+  consort.id.interim2,
+  consort.id.DXbl_Dem,
+  consort.id.interim3,
+  consort.id.DX_allNA,
+  consort.id.interim4,
+  consort.id.no_basecov,
+  consort.id.interim5)
+
+# Unite removal columns
+df.consort <- df.consort %>% 
+  unite(
+    "consort.id.singlevisit", 
+    "consort.id.DXbl_NA", 
+    "consort.id.DXbl_Dem",
+    "consort.id.DX_allNA",
+    "consort.id.no_basecov", 
+    sep = "", remove = TRUE, 
+    na.rm = TRUE) %>%
+  rename(consort.id.excl = "consort.id.singlevisit")
+
+df.consort$consort.id.excl[df.consort$consort.id.excl == ""] <- NA
+
+g.consort <- consort_plot(data = df.consort,
+             orders = c(consort.id.raw = "ADNI participants",
+                        consort.id.excl = "Excluded",
+                        consort.id.interim4 = "Subjects for modelling"),
+             side_box = c("consort.id.excl"),
+             cex = 0.7)
+
+ggsave("consort_diagram.png", plot = g.consort, device = "png",
+       path = "./data_cleaned/",
+       width = 6, height = 2)
+
+
+# Note that the subjects can be removed due to one or more reasons, so the diagram depends on the order of exclusion.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------

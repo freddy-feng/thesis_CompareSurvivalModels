@@ -29,7 +29,7 @@ library(survminer)
 library(Hmisc)
 #library(ADNIMERGE)
 
-source("function_utility_exp.R") # Utility functions
+source("function_utility.R") # Utility functions
 ```
 
 # Import data
@@ -37,10 +37,107 @@ source("function_utility_exp.R") # Utility functions
 Set the surv and long data for IDA in the chunk below:
 
 ```{r}
-load("adni_cleaned_prc.RData")
+load("./data_cleaned/adni_cleaned.RData")
+```
 
-df.surv_preds <- df.surv_preds_prc
-df.long <- df.long_censored_prc
+# Table: Baseline characteristics
+
+```{r}
+library(ADNIMERGE) # use adnimerge because it retain all labels
+
+df.tmp_baselinechar <- adnimerge %>% 
+  filter(RID %in% df.surv_preds$RID) %>%
+  filter(VISCODE == "bl") %>%
+  select(AGE,  DX.bl, DX,
+         ORIGPROT,
+         PTGENDER, PTEDUCAT, PTETHCAT, PTRACCAT, PTMARRY, APOE4)
+  #modify_if(is.factor, as.character)
+  
+s <- summaryM(
+  DX + 
+    AGE +
+    PTGENDER + PTEDUCAT + PTETHCAT + PTRACCAT + PTMARRY + APOE4 ~ ORIGPROT,
+  data = df.tmp_baselinechar, 
+  overall = TRUE, test = FALSE)
+
+print(s, digits = 3)
+```
+
+
+```{r}
+title.table <- "Baseline characteristics of ADNI cohorts"
+
+latex(s, digits = 3,
+      title = title.table, 
+      what = "%", legend.bottom = TRUE)
+```
+
+
+# Table: cohort follow up time and censoring rate
+
+```{r}
+# all phases
+summary(df.surv_preds$event)
+sd(df.surv_preds$event)
+summary(df.surv_preds$time)
+sd(df.surv_preds$time)
+```
+
+
+```{r}
+# phase specific
+lapply(unique(df.surv_preds$ORIGPROT), function(x) {
+  df.tmp <- df.surv_preds %>%
+    filter(ORIGPROT == x)
+  summary <- df.tmp %>%
+    select(event, time) %>%
+    summary()
+  sd.event <- sd(df.tmp$event)
+  sd.fup <- sd(df.tmp$time)
+  
+  list(x, summary, event.sd = sd.event, fup.sd = sd.fup)
+})
+
+
+```
+
+## number of visits 
+```{r}
+# by original protocol 
+df.tmp <- df.long_censored %>%
+  group_by(ORIGPROT, id) %>%
+  dplyr::summarize(
+    visits.subject = n(), .groups = "drop"
+  )
+
+df.tmp %>%
+  group_by(ORIGPROT) %>%
+  dplyr::summarise(
+    visits.avg = mean(visits.subject),
+    visits.sd = sd(visits.subject),
+    visits.median = median(visits.subject),
+    visits.max = max(visits.subject),
+    visits.min = min(visits.subject)
+  )
+```
+
+
+```{r}
+# combined
+df.tmp <- df.long_censored %>%
+  group_by(id) %>%
+  dplyr::summarize(
+    visits.subject = n(), .groups = "drop"
+  )
+
+df.tmp %>%
+  dplyr::summarise(
+    visits.avg = mean(visits.subject),
+    visits.sd = sd(visits.subject),
+    visits.median = median(visits.subject),
+    visits.max = max(visits.subject),
+    visits.min = min(visits.subject)
+  )
 ```
 
 
@@ -508,7 +605,7 @@ data.long %>% filter(id == 6073)
 
 
 
-# Subject at risk over time
+# Figure: Subject at risk
 
 ```{r}
 landmark <- 0:15
@@ -538,40 +635,57 @@ res.at_risk <- do.call(
 
 res.status <- res.status %>% add_row(res.at_risk)
 
-g <- res.status %>%
+g.status_by_time <- res.status %>%
   ggplot(aes(x = t, y = n, group = status, color = status)) +
     geom_line(aes(linetype = status), size = 0.8) + geom_point() +
     scale_x_continuous(breaks = landmark) +
     scale_y_continuous(breaks = 0:16 * 100) +
+    scale_color_manual(values = c("#00BA38", "#F8766D", "#619CFF")) +
     xlab("Years since baseline (t)") + ylab("Number of subjects") + 
     labs(
       color = "Status",
       linetype = "Status"
     ) +
-    ggtitle("Cumulative number of subjects by status up to time t") +
-  theme_bw()
+    ggtitle("Cumulative number of subjects") +
+  theme_pubclean()
 
-g
+g.status_by_time
 
-ggsave(filename = "./figure/status_by_time.png", plot = g, width = 8, height = 5)
+ggsave(filename = "./figure/status_by_time.png", plot = g.status_by_time, 
+       width = 8, height = 5)
 ```
 
+
+
 ```{r}
-g <- df.surv_preds %>%
+g.hist_survtime <- df.surv_preds %>%
   select(time, status) %>%
   ggplot() + 
   geom_histogram(aes(time, group = status, fill = status),
-                 binwidth = 0.25) +
+                 binwidth = 0.5, ) +
   scale_x_continuous(breaks = 0:17) + 
-  ggtitle("Survival time by survival outcome") +
+  scale_y_continuous(breaks = 0:8 * 50) +
+  ggtitle("Distribution of survival time") +
   labs(fill = "Type") + 
-  xlab("Years since baseline (t)") +
-  theme_bw()
+  xlab("Years since baseline (t)") + ylab("Number of subjects") +
+  theme_pubclean()
 
-g
+g.hist_survtime
 
-ggsave(filename = "./figure/hist_survtime.png", plot = g, width = 8, height = 5)
+ggsave(filename = "./figure/hist_survtime.png", plot = g.hist_survtime, 
+       width = 8, height = 5)
 ```
+
+```{r}
+# Output in two panel format
+g.combine <- ggarrange(plotlist = list(g.status_by_time, g.hist_survtime), 
+          ncol = 2, labels = "AUTO", 
+          widths = c(6, 6), heights = c(4, 4))
+g.combine
+ggsave(filename = "summary_outcome_time.png", plot = g.combine, device = "png",
+       path = "./figure/", width = 8, height = 4)
+```
+
 
 ```{r}
 landmark <- 0:15
@@ -601,6 +715,7 @@ res.at_risk <- do.call(
 
 res.status <- res.status %>% add_row(res.at_risk)
 
+
 g <- res.status %>%
   ggplot(aes(x = t, y = n, group = status, color = status)) +
     geom_line(aes(linetype = status), size = 0.8) + geom_point() +
@@ -618,6 +733,160 @@ g
 
 ggsave(filename = "./figure/status_beyond_time.png", plot = g, width = 8, height = 5)
 
+```
+# Figure: Proportions of survival outcome and subjects at risk
+
+```{r}
+# proportion of subject at risk by survival outcome
+
+landmark <- 0:15
+
+res.status <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time > x) %>%
+    group_by(status) %>%
+    summarise(n = n())
+  df$t <- x
+  return(df)
+}))
+res.status$status <- res.status$status %>% as.character()
+
+res.at_risk <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time > x) %>%
+    summarise(n = n())
+  df$t <- x
+  df$status <- "at risk in total"
+  return(df)
+}))
+
+#res.status <- res.status %>% add_row(res.at_risk)
+
+res.status <- res.status %>%
+  left_join(res.at_risk[, c("n", "t")], by = "t", suffix = c("", ".total"))
+
+res.status$r <- res.status$n / res.status$n.total
+
+max.y.axis <- 1250 # scale the second axis
+interval.y.axis <- 5
+
+g.landmark_proportion <- res.status %>%
+  ggplot(aes(x = t)) +
+    geom_bar(aes(y = n, group = status, fill = status), 
+             width = 0.8, alpha = 0.3,
+             stat = "identity", position = position_dodge()) +
+    geom_line(aes(y = r*max.y.axis, group = status, 
+                  color = status, linetype = status), 
+              size = 0.8) + 
+    geom_point(aes(y = r*max.y.axis, group = status, 
+                  color = status)) +
+    scale_x_continuous(name = "Landmark time (year)", breaks = landmark) +
+    scale_y_continuous(
+      name = "Number of subjects",
+      breaks = 0:interval.y.axis * max.y.axis / interval.y.axis ,
+      sec.axis = sec_axis(
+        trans = ~./max.y.axis,
+        name = "Proportion",
+        breaks = 0:interval.y.axis / interval.y.axis # range 0,1
+      )
+    ) +
+    labs(
+      color = "Proportion",
+      linetype = "Proportion",
+      fill = "Count"
+    ) +
+    ggtitle("Subjects at risk") +
+  theme_pubclean()
+
+g.landmark_proportion
+```
+
+
+```{r}
+# proportion of events observed
+
+landmark <- 0:15
+
+res.status <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time <= x) %>%
+    group_by(status) %>%
+    summarise(n = n())
+  df$t <- x
+  return(df)
+}))
+res.status$status <- res.status$status %>% as.character()
+
+res.at_risk <- do.call(
+  rbind, 
+  lapply(landmark, function(x) {
+  df <- df.surv_preds %>%
+    filter(time <= x) %>%
+    summarise(n = n())
+  df$t <- x
+  df$status <- "at risk in total"
+  return(df)
+}))
+
+#res.status <- res.status %>% add_row(res.at_risk)
+
+res.status <- res.status %>%
+  left_join(res.at_risk[, c("n", "t")], by = "t", suffix = c("", ".total"))
+
+res.status$r <- res.status$n / res.status$n.total
+
+max.y.axis <- 1250 # scale the second axis
+interval.y.axis <- 5
+
+g.observed_proportion <- res.status %>%
+  ggplot(aes(x = t)) +
+    geom_bar(aes(y = n, group = status, fill = status), 
+             width = 0.8, alpha = 0.3,
+             stat = "identity", position = position_dodge()) +
+    geom_line(aes(y = r*max.y.axis, group = status, 
+                  color = status, linetype = status), 
+              size = 0.8) + 
+    geom_point(aes(y = r*max.y.axis, group = status, 
+                  color = status)) +
+    scale_x_continuous(name = "Years since baseline", breaks = landmark) +
+    scale_y_continuous(
+      name = "Number of subjects",
+      breaks = 0:interval.y.axis * max.y.axis / interval.y.axis ,
+      sec.axis = sec_axis(
+        trans = ~./max.y.axis,
+        name = "Proportion",
+        breaks = 0:interval.y.axis / interval.y.axis # range 0,1
+      )
+    ) +
+    labs(
+      color = "Proportion",
+      linetype = "Proportion",
+      fill = "Count"
+    ) +
+    ggtitle("Cumulative observed outcomes") +
+  theme_pubclean()
+
+g.observed_proportion
+```
+
+
+
+```{r}
+# Output in two panel format
+g.combine <- ggarrange(plotlist = list(g.observed_proportion, g.landmark_proportion), 
+          ncol = 2, labels = "AUTO", 
+          widths = c(6, 6), heights = c(4, 4),
+          common.legend = TRUE, legend = "bottom"
+          )
+g.combine
+ggsave(filename = "summary_outcome_proportion.png", plot = g.combine, device = "png",
+       path = "./figure/", width = 10, height = 4)
 ```
 
 # Survival curves
@@ -1040,3 +1309,12 @@ plots <- lapply(plot_covariates, function(feature){
 plots
 
 ```
+
+
+
+```{r}
+transformation_summary
+```
+
+
+

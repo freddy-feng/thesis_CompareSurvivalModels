@@ -87,9 +87,11 @@ Summarize.tdAUC <- function(name, path, detlaT) {
     ) %>%
     group_by(prediction_time) %>%
     summarise(
-      mean = mean(tdAUC),
-      ci.upper = quantile(tdAUC, 0.975),
-      ci.lower = quantile(tdAUC, 0.025)
+      mean = mean(tdAUC, na.rm = TRUE),
+      median = median(tdAUC, na.rm = TRUE),
+      sd = sd(tdAUC, na.rm = TRUE),
+      ci.upper = quantile(tdAUC, 0.975, na.rm = TRUE),
+      ci.lower = quantile(tdAUC, 0.025, na.rm = TRUE)
     ) 
   
   
