@@ -211,6 +211,52 @@ for (i in 1:n_fold) {
 }
 ```
 
+TO DO NOTE: according to the Brier score, I need to use summary & survfit with training.x.mat and testing.x.mat to compute the predicted survival probabilities. then, feed the surv prob to the pec and compute the Brier score.
+therefore i need to change the folds and folds.eval structure a bit? i need to keep the training.x.mat up to evaluation!
+
+```{r}
+testing.dat <- cbind(surv.new[, c("id", "time", "event")], testing.x.mat)
+testing.dat
+```
+
+
+```{r}
+library(pec)
+
+res.survpred <- summary(
+  survfit(
+    folds[[i]]$model$cvfit, 
+    x = training.x.mat, y = training.y, 
+    s = "lambda.min", 
+    newx = testing.x.mat),
+  times = 0:15)
+
+test.brier <- pec(
+  object = list("test" = t(res.survpred$surv)), # A matrix with predicted probabilities, dimension of n subjects by m times 
+  formula = Surv(time, event) ~ AGE, # Survival formula for censoring model
+  data = surv.new, # Data frame in which to validate the prediction models and to fit the censoring model
+  exact = FALSE, # Do not predict at event times
+  times = 0:15, # Predict at given times
+  cens.model = "cox", # Method for estimating inverse probability of censoring weights:
+  # cox: A semi-parametric Cox proportional hazard model is fitted to the censoring times
+  # marginal: The Kaplan-Meier estimator for the censoring times
+  splitMethod = "none", # SplitMethod for estimating the prediction error curves
+  B = 0, # Number of bootstrap samples. The default depends on argument splitMethod.
+  verbose = TRUE # if TRUE report details of the progress, e.g. count the steps in cross-validation.
+  )
+
+
+# Does not work! It does not contain the baseline survival function => surv prob is not known
+# predsurvprob <- predict(
+#   folds[[i]]$model$cvfit, # Fitted "cv.glmnet" object
+#   newx = testing.x.mat, # Matrix of new values for x at which predictions are to be made. Must be a matrix
+#   s = "lambda.min",
+#   type = "response" # Type "link" (default) returns x^T \beta
+#   )
+
+```
+
+
 
 # Inpsect results
 

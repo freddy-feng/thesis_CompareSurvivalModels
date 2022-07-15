@@ -40,6 +40,64 @@ Set the surv and long data for IDA in the chunk below:
 load("./data_cleaned/adni_cleaned.RData")
 ```
 
+# Table: data format
+
+```{r}
+example.id <- 5 
+
+
+example.raw <- ADNIMERGE::adnimerge %>%
+  filter(RID == example.id) %>%
+  select(RID, VISCODE, EXAMDATE, Years.bl, DX.bl, DX, AGE, PTGENDER, ADAS13) %>%
+  head(3)
+  
+
+example.surv <- df.surv_preds %>%
+  filter(RID == example.id) %>%
+  select(RID, time, event, DX.bl, AGE, PTGENDER, ADAS13)
+
+example.long <- df.long_censored %>%
+  filter(RID == example.id) %>%
+  select(RID, VISCODE, Years.bl, DX.bl, AGE, PTGENDER, ADAS13) %>%
+  head(3)
+
+
+rm(example.id)
+
+```
+
+```{r}
+title.table <- "Example of raw data"
+latex(example.raw, digits = 3,
+      title = title.table,
+      caption = title.table,
+      booktabs = TRUE,
+      what = "%",
+      size = "small",
+      na.blank = FALSE,
+      legend.bottom = TRUE)
+
+title.table <- "Example of surv data"
+latex(example.surv, digits = 3,
+      title = title.table,
+      caption = title.table,
+      booktabs = TRUE,
+      what = "%", 
+      size = "small",
+      na.blank = FALSE,
+      legend.bottom = TRUE)
+
+title.table <- "Example of long data"
+latex(example.long, digits = 3,
+      title = title.table,
+      caption = title.table,
+      booktabs = TRUE,
+      what = "%", 
+      size = "small",
+      na.blank = FALSE,
+      legend.bottom = TRUE)
+```
+
 # Table: Baseline characteristics
 
 ```{r}
