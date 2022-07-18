@@ -557,6 +557,58 @@ df.tdauc.compare %>%
 ```
 
 
+## Figure: Compare pencal and pCox
+```{r, fig.width=8, fig.height=5}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.tdauc.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  filter(method == "pCox-lm" | method == "pencal" | method == "pCox-bl" | method == "pencal-min" | method == "pencal-1se") %>%
+  filter(n_bl.covariate == 26 | n_bl.covariate == 5) %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = repeated.CV.mean, 
+    group = model.name,
+    color = model.name)
+  ) +
+ # geom_errorbar(aes(
+ #   ymax = repeated.CV.max,
+ #   ymin = repeated.CV.min),
+ #   alpha = 0.3,
+ #   width = 0.3, size = 0.8) +
+#  geom_line(aes(linetype = factor(n_bl.covariate)), alpha = 0.8, size = 0.4) +
+  geom_line(alpha = 0.8, size = 0.4) +
+  geom_point(aes(shape = method), alpha = 0.6, size = 2.5) +
+  scale_x_continuous(breaks = deltaT) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0.7, 1)) +
+  ggsci::scale_color_jama() +
+  xlab("Year from baseline") + ylab("rep CV time-dependent AUC\n(higher is better)") +
+  labs(
+    title = "Comparison of estimated tdAUC under repeated 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "CV repeated in 10 different seeds",
+#    caption = "Error bar represents the max and min",
+#    linetype = "number of (candidate) baseline covariates",
+    color = "model"
+  )  +
+  theme_pubr() +
+  theme(
+    legend.position = "bottom", 
+    legend.box = "vertical",
+    panel.grid.major.y = element_line(color = "grey80")
+    ) 
+```
+
 # C index 
 
 ## Consolidate
@@ -598,7 +650,7 @@ for (i in 1:length(models.name)) {
 
 ```
 
-## Plot the c-index 
+## Previous: Plot the c-index 
 ```{r, fig.width=8}
 # ------------------------------------------------------------------------------------------------
 # Plot df.c.index.compare
@@ -627,3 +679,210 @@ df.c.index.compare %>%
     )
 ```
 
+## Figure: Plot the c-index 
+```{r, fig.width=8}
+# ------------------------------------------------------------------------------------------------
+# Plot df.c.index.compare
+# ------------------------------------------------------------------------------------------------
+df.c.index.compare %>%
+  filter(grepl(model, pattern = "scaled")) %>% # Comment out to show all
+  filter(grepl(model, pattern = "scenario2")) %>%
+  filter(method == "pCox-lm" | method == "pencal" | method == "pCox-bl") %>%
+  ggplot(aes(x = model, y = c.index, fill = model)) + 
+    geom_point(
+      aes(color = model),
+      position = position_jitter(seed = 1, width = 0.2),
+      alpha = 0.8) +
+    geom_violin(width = 0.5, alpha = 0.2) + 
+    geom_boxplot(width = 0.1, alpha = 0.2) + 
+    coord_cartesian(ylim = c(0.8, 1)) +
+    ggsci::scale_color_jama() +
+    ggsci::scale_fill_jama() +
+    xlab("") + ylab("C-index (higher is better)") +
+    labs(
+      title = "Comparison of estimated C-index under single 10-fold CV",
+      ) + 
+    theme_pubr() +
+    theme(
+      legend.position = "bottom",
+      axis.ticks.x = element_blank(),
+      axis.text.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      panel.grid.major.y = element_line(color = "grey80")
+    )
+```
+
+# Brier score
+
+## Consolidate
+```{r}
+# ------------------------------------------------------------------------------------------------
+# Summarize Brier score results
+# ------------------------------------------------------------------------------------------------
+
+# Initialize
+df.brier.compare <- data.frame()
+# ------------------------------------------------------------------------------------------------
+
+T.start <- 2
+deltaT <- 1:15
+deltaT <- deltaT[deltaT > T.start]
+
+is_lm <- grepl(models.name, pattern = paste0("lm", T.start))
+models.name.valid <- models.name[is_lm]
+models.path.valid <- models.path[is_lm]
+# ------------------------------------------------------------------------------------------------
+
+# Repeat the following steps for different models
+
+for (i in 1:length(models.name.valid)) {
+  
+  name <- models.name.valid[i]
+  path <- models.path.valid[i]
+    
+  if (i == 1) {
+    # For first model to initialize dataframe
+    df.brier <- Summarize.brier(
+      name = name,
+      path = paste0(folderpath, path),
+      detlaT = deltaT
+      )
+    
+    df.brier.compare <- df.brier
+  }
+
+  # Result i, i > 1
+  df.brier <- Summarize.brier(
+    name = name,
+    path = paste0(folderpath, path),
+    detlaT = deltaT
+    )
+  
+  # Combine results from other models to compare dataframe
+  df.brier.compare <- df.brier.compare %>%
+    add_row(df.brier)
+}
+
+df.brier.compare %>% head()
+```
+
+## Figure: Compare pencal and pCox
+```{r, fig.width=8, fig.height=5}
+# ------------------------------------------------------------------------------------------------
+# Plot df.tdauc.compare
+# ------------------------------------------------------------------------------------------------
+df.brier.compare %>% 
+  filter(scenario == "scenario2") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  filter(method == "pCox-lm" | method == "pencal" | method == "pCox-bl") %>%
+  filter(n_bl.covariate == 26 | n_bl.covariate == 5) %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = repeated.CV.mean, 
+    group = model.name,
+    color = model.name)
+  ) +
+ # geom_errorbar(aes(
+ #   ymax = repeated.CV.max,
+ #   ymin = repeated.CV.min),
+ #   alpha = 0.3,
+ #   width = 0.3, size = 0.8) +
+#  geom_line(aes(linetype = factor(n_bl.covariate)), alpha = 0.8, size = 0.4) +
+  geom_line(alpha = 0.8, size = 0.4) +
+  geom_point(aes(shape = method), alpha = 0.6, size = 2.5) +
+  scale_x_continuous(breaks = deltaT) + 
+#  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(ylim = c(0, 0.25)) +
+  ggsci::scale_color_jama() +
+  xlab("Year from baseline") + ylab("rep CV Brier score\n(lower is better)") +
+  labs(
+    title = "Comparison of estimated BS under repeated 10-fold CV",
+    subtitle = paste("at landmark time", T.start),
+    caption = "CV repeated in 10 different seeds",
+#    caption = "Error bar represents the max and min",
+#    linetype = "number of (candidate) baseline covariates",
+    color = "model"
+  )  +
+  theme_pubr() +
+  theme(
+    legend.position = "bottom", 
+    legend.box = "vertical",
+    panel.grid.major.y = element_line(color = "grey80")
+    ) 
+```
+
+
+# Variable importance
+
+only usable when folds are kept, and using cv.glmnet
+
+```{r, fig.width=4,  fig.height=8}
+temp.min <- lapply(1:length(folds), function(i) {
+  out <- Find.var.importance(folds[[i]]$model$step3$pcox.orig, lambda = "lambda.min")
+  out <- data.frame(out)
+  out <- cbind(var = rownames(out), out)
+  out <- out %>% mutate(fold = i)
+  rownames(out) <- NULL
+  return(out)
+  })
+
+temp.min <- temp.min %>%
+  reduce(add_row) %>%
+  mutate(lambda = "lambda.min")
+
+# temp.min %>%
+#   ggplot(aes(x = coef, y = var)) +
+#   geom_jitter() + 
+#   scale_x_log10() +
+#   theme_minimal() + 
+#   theme(
+#     panel.grid.major = element_line(color = "grey80")
+#   )
+```
+
+```{r, fig.width=4,  fig.height=8}
+temp.1se <- lapply(1:length(folds), function(i) {
+  out <- Find.var.importance(folds[[i]]$model$step3$pcox.orig, lambda = "lambda.1se")
+  out <- data.frame(out)
+  out <- cbind(var = rownames(out), out)
+  out <- out %>% mutate(fold = i)
+  rownames(out) <- NULL
+  return(out)
+  })
+
+temp.1se <- temp.1se %>%
+  reduce(add_row) %>%
+  mutate(lambda = "lambda.1se")
+
+# temp.1se %>%
+#   ggplot(aes(x = coef, y = var)) +
+#   geom_jitter() + 
+# #  geom_vline(xintercept = 0) +
+#   scale_x_log10() +
+#   theme_minimal() + 
+#   theme(
+#     panel.grid.major = element_line(color = "grey80")
+#   )
+```
+
+```{r, fig.width=4,  fig.height=8}
+temp.min %>%
+  add_row(temp.1se) %>%
+  ggplot(aes(x = coef, y = var, group = lambda, shape = lambda, color = factor(fold))) +
+  geom_jitter(alpha = 0.8) + 
+#  geom_vline(xintercept = 0) +
+  scale_x_log10() +
+  theme_minimal() + 
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "grey80")
+  )
+```

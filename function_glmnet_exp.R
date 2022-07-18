@@ -147,6 +147,10 @@ Train_glmnet <- function(
   res <- list(
     cvfit = cvfit,
     covs.pcox = covs.pcox,
+    training.data = list(
+      training.x.mat = training.x.mat,
+      training.y = training.y
+    ),
     runtimes = list(
       step1 = t.step1,
       total = t.step1)

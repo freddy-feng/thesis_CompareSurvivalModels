@@ -23,7 +23,7 @@ Evaluate_tdauc <- function(
     predict.time <- deltaT[j]
     
 #    print(predict.time)
-    event.times <-surv.new$time[surv.new$event == 1]
+    event.times <- surv.new$time[surv.new$event == 1]
     if (all(!(event.times <= predict.time))) {
       mess <- paste(
         "No event (surv.new$event == 1) is observed between landmark time", T.start, 
@@ -38,7 +38,7 @@ Evaluate_tdauc <- function(
         Stime = surv.new$time, # Event time or censoring time for subjects
         status = surv.new$event, # Indicator of status, 1 if death or event, 0 otherwise
         marker = linpred, # Predictor or marker value
-        entry = NULL, # Entry time for the subjects, default is NULL, why 0?
+        entry = NULL, # Entry time for the subjects, default is NULL
         predict.time = predict.time, # Time point of the ROC curve
         cut.values = NULL, # marker values to use as a cut-off for calculation of sensitivity and specificity
         method = "NNE", 
@@ -163,3 +163,78 @@ Plot_all_tdROC <- function(folds.eval) {
   return (out)
 }
 # ------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+# Summarize Brier score in different folds from folds.eval and output dataframe
+# ------------------------------------------------------------------------------------------------
+# Note that the length of Brier score may be shorter in some folds if test set does not contain survival times after the floor(T.max)
+Summarize.brier <- function(name, path, detlaT) {
+  # Load folds.eval
+  load(path)
+  
+  n_fold <- length(folds.eval)
+  
+  # Extract from folds.eval into list of Brier
+  list.brier <- lapply(1:n_fold, function(i) {
+    deltaT.eval <- folds.eval[[i]]$perf$deltaT # in case deltaT in fold.eval > deltaT
+    brier <- folds.eval[[i]]$perf$brier
+    missing <- length(deltaT.eval) - length(brier)
+    if (missing > 0) {
+         brier <- c(brier, rep(NA, times = missing))
+       }
+    brier <- brier[deltaT.eval %in% deltaT]
+  })
+  
+  
+  # Convert list into data frame
+  df.brier <- data.frame(do.call(rbind, list.brier)) # row i = fold i
+  colnames(df.brier) <- deltaT
+  
+  # Compute statistics
+  df.brier <- df.brier %>%
+    pivot_longer(
+      cols = everything(),
+      names_to = "prediction_time",
+      values_to = "BS"
+    ) %>%
+    group_by(prediction_time) %>%
+    summarise(
+      mean = mean(BS, na.rm = TRUE),
+      median = median(BS, na.rm = TRUE),
+      sd = sd(BS, na.rm = TRUE),
+      ci.upper = quantile(BS, 0.975, na.rm = TRUE),
+      ci.lower = quantile(BS, 0.025, na.rm = TRUE)
+    ) 
+  
+  
+  df.brier$prediction_time <- as.numeric(df.brier$prediction_time)
+  df.brier <- df.brier %>% arrange(prediction_time)
+  
+  # Get model information, identical over all folds
+  df.brier$model.id <- name # Different seed, different model name
+  df.brier$model.name <- folds.eval[[1]]$model.info$name
+  df.brier$method <- folds.eval[[1]]$model.info$hyperparam$method
+  df.brier$scenario <- folds.eval[[1]]$model.info$hyperparam$set_scenario
+  df.brier$landmark <- folds.eval[[1]]$model.info$hyperparam$landmark
+  df.brier$n_bl.covariate <- length(folds.eval[[1]]$model.info$covariate$base)
+  df.brier$bl.covariate <- paste(folds.eval[[1]]$model.info$covariate$base, collapse = "+")
+  
+  return(df.brier)
+}
+# -----------------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------------
+# Variable importance (use and interpret with care!)
+# -----------------------------------------------------------------------------------
+# Not ready for use. The coefficients may not be standardized. Need to double check.
+Find.var.importance <- function(object, lambda) {
+  beta <- predict(object, s = lambda, type = "coefficients")
+  if (is.list(beta)) {
+    out <- do.call("cbind", lapply(beta, function(x) x[, 1]))
+    out <- as.data.frame(out, stringAsFactors = TRUE)
+  } else {
+    out <- data.frame(coef = beta[, 1])
+  }
+  out <- abs(out[rownames(out) != "(Intercept)",, drop = FALSE])
+  out 
+}
+# -----------------------------------------------------------------------------------
