@@ -28,8 +28,6 @@ method <- "pCox-bl"
 # Set experiment parameters here!
 # -----------------------------------------------------------------------------------
 
-
-
 n_fold <- 10 # Cross validation
 
 set_scenario <- "scenario2" # Determine how many longitudinal covariates to use
@@ -43,7 +41,7 @@ baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # b5
 # -----------------------------------------------------------------------------------
 
 
-for (T.start in c(2)) { # Landmark time
+for (T.start in c(3)) { # Landmark time
   # -----------------------------------------------------------------------------------
   for (seed in 721:730) { # Repeated CV
 #  for (seed in 721:721) { # Single CV, for debugging

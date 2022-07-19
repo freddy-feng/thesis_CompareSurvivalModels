@@ -134,7 +134,7 @@ for (i in 1:n_fold) {
   # -----------------------------------------------------------------------------------  
   # MFPCCox - Initialize multivar array
   # -----------------------------------------------------------------------------------
-  # The scaling sould be done within the fold, because the scaling table change on the training data
+  # The scaling should be done within the fold, because the scaling table change on the training data
   if (is_scaled == "scaled") {
     print("[Reminder] scaling is in effect.")
     long.all <- Scale_covariates(data.long, folds[[i]]$scaling_table)

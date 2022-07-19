@@ -56,6 +56,7 @@ Train_MFPCCox <- function(
     multivar,
     subject.id,
     y.names,
+    baseline.covs,
     argvals,
     pve,
     nbasis
@@ -137,13 +138,15 @@ Train_MFPCCox <- function(
   training.surv.rho <- data.frame(training.surv, tmp.rho)
   
   lhs <- "Surv(time, event)"
-  rhs <- paste(c(basecov.names, rho.names), collapse = "+")
+  rhs <- paste(c(baseline.covs, rho.names), collapse = "+")
   formula <- as.formula(paste(lhs, "~", rhs))
   
   mfpccox <- coxph(
     formula, 
     data = training.surv.rho,
-    model = TRUE)
+    model = TRUE,
+    x = TRUE,
+    y = TRUE)
   
   t.end <- Sys.time()
   t.step3 <- as.numeric(difftime(t.end, t.start, units = "mins"))

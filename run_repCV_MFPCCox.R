@@ -1,7 +1,7 @@
 on.alice <- F
 
 # Set folder path on ALICE
-folder.alice <- "/data1/s2887592/pencal"
+folder.alice <- "/data1/s2887592/MFPCCox"
 if (on.alice) setwd(folder.alice)
 
 # -----------------------------------------------------------------------------------
@@ -16,8 +16,9 @@ library(pec)
 source("function_utility.R")
 source("function_evaluation.R")
 
-# For PRC only
-source("function_pencal_exp.R")
+# For MFPCCox only
+source("function_MFPCCox.R") # From Kan Li github
+source("function_MFPCCox_exp.R")
 
 select <- dplyr::select
 # -----------------------------------------------------------------------------------
@@ -32,37 +33,37 @@ seeds <- 721:(721+n_RCV-1) # Seeds for RCV
 # -----------------------------------------------------------------------------------
 # Set model hyperparam
 
-# model selection criteria
-#method <- "pencal-min"
-method <- "pencal-1se"
 
-if (method == "pencal-1se") {
-  glmnet.lambda <- "lambda.1se"  
-} else if (method == "pencal-min") {
-  glmnet.lambda <- "lambda.min"
-}
+method <- "MFPCCox"
+  
+pve <- 0.7 # Hyperparam to choose number of pc
+nbasis <- 3 # Mean function
 
-penalty <- "ridge"
+method <- paste(c(
+  method,
+  paste0("pve", as.character(pve*100)), 
+  paste0("nbasis", as.character(nbasis))),
+  collapse = "_")
+
 
 # -----------------------------------------------------------------------------------
 # Set data param
 
-set_scenario <- "scenario2" # Determine how many longitudinal covariates to use
+set_scenario <- "scenario1" # Determine how many longitudinal covariates to use
 
 # Baseline covariates (not time-varying in adnimerge)
 baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "status.bl", "APOE4") # b5 
 #  baseline.covs <- c("AGE", "PTGENDER", "PTEDUCAT", "APOE4") # b4 = drop baseline diagnosis
 
 is_transformed <- "transformed" # Transform covariates to reduce skewness
-is_scaled <- "scaled" # Set to "scaled" to scale covariates for LMMs
-is_standardized <- "std" # Refer to step 3 of pencal, standardizing the random effects summary
+is_scaled <- "scaled" # Set to "scaled" to scale covariates; set to "notScaled" for original
 
 # -----------------------------------------------------------------------------------
 # Train test loops
 # -----------------------------------------------------------------------------------
 # Outer loop - landmark time
 for (T.start in T_LMs) {
-#for (T.start in c(1, 2, 3)) {
+  #for (T.start in c(1, 2, 3)) {
   print(paste("Start experiment for landmark time T_LM:", T.start))
   # -----------------------------------------------------------------------------------
   # Set identifier
@@ -71,15 +72,15 @@ for (T.start in T_LMs) {
   
   model.hyperparam <- list(
     method = method,
+    pve = pve,
+    nbasis = nbasis,
     set_scenario = set_scenario,
     landmark = landmark,
     is_scaled = is_scaled,
-    is_transformed = is_transformed,
-    is_standardized = is_standardized,
-    penalty = penalty
+    is_transformed = is_transformed
   )
-  
-  hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled, is_standardized, penalty), collapse = "_") # Use hyperparam to describe model
+
+  hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled), collapse = "_") # Use hyperparam to describe model
   model.name <- paste(c(method, landmark, hyperparam), collapse = "_")
   # -----------------------------------------------------------------------------------
   
@@ -181,13 +182,42 @@ for (T.start in T_LMs) {
     print("[Remind] pCox method is used, the additional covariates will be updated")
   }
   # -----------------------------------------------------------------------------------
+  
+  # -----------------------------------------------------------------------------------
+  # MFPCCox only - Format long data into 3-dim array
+  # -----------------------------------------------------------------------------------
+  # remove "Fusiform", "Ventricles", "WholeBrain" due to error => relax pve to 0.7 can overcome problem
+  # Error in .PACE(X = funDataObject@argvals[[1]], funDataObject@X, Y.pred = Y.pred, : 
+  # Measurement error estimated to be zero and there are fewer observed points than PCs; scores cannot be estimated.
+  
+  # set longitudinal covariates
+  #y.names.literature <- c("ADAS13", "MMSE", "RAVLT.learning", "RAVLT.immediate", "FAQ") # longitudinal covariates in literature
+  #y.names # Common to pencal
+  
+  # Use candidate long covariates as basis, then drop covariates that reported error
+  # identical over all folds, because the candidate is based on analysis of missing proportions on full data
+  
+  # time variable for longitudinal variable y
+  #y.t <- "Years.bl" # timestamp column name for long covariates
+  #y.t <- "M" # use months from baseline instead of years from baseline, less possible values in obstime
+  y.t <- "Y" # generic, use years from baseline, rounded
+  
+  # To prevent a potential bug that the test set has a observed time different from the time domain
+  # But it also makes it less robust to new data?
+  obstime <- sort(unique(data.long[, y.t])) # get unique obs timestamp in long data
+  argvals <- obstime / max(obstime) # scale obstime to [0,1] for uPACE
+  
+  subject.id <- data.surv$id # subject ids in full data
+  nPat <- length(subject.id) # number of subjects in full data
+  
+  # -----------------------------------------------------------------------------------
   # Middle loop - seed for repeated CV
   for (seed in seeds) { # Vary seed for repeated CV
-#  for (seed in 721:721) { # Only run once
-
+    #  for (seed in 721:721) { # Only run once
+    
     print(paste("This CV will perform train-test split using seed", seed))
     # -----------------------------------------------------------------------------------
-
+    
     # -----------------------------------------------------------------------------------
     # Obtain a list of folds to initialize cross validation
     # Involves:
@@ -226,10 +256,15 @@ for (T.start in T_LMs) {
     # Scaling will be carried out in training step.
     
     #Check_folds(data.surv, folds) # Uncomment to check the stratification / class balance after split
-    
-    
     # -----------------------------------------------------------------------------------
-
+    # -----------------------------------------------------------------------------------
+    # [Warning] MFPCCox only - a temporary fix to remove some covariates
+    # -----------------------------------------------------------------------------------
+    candidate.long.covs <- folds[[1]]$candidate.long.covs
+    y.names <- candidate.long.covs[!(candidate.long.covs %in% c("Fusiform", "Ventricles", "WholeBrain", "ICV", "LDELTOTAL"))] 
+    #y.names <- vars_long
+    n.y <- length(y.names) # number of long covariates
+    # -----------------------------------------------------------------------------------
     
     print(paste("Begin training for model:", model.name))
     # -----------------------------------------------------------------------------------
@@ -245,7 +280,7 @@ for (T.start in T_LMs) {
     # Fit models in CV loop
     # -----------------------------------------------------------------------------------
     for (i in 1:n_fold) {
-#    for (i in c(1)) { # For debug, run single fold only
+      #    for (i in c(1)) { # For debug, run single fold only
       print("---------------------------------------------------------------------------------------------------")
       print(paste("Seed", seed, "- Start training in fold", i))
       # -----------------------------------------------------------------------------------
@@ -268,53 +303,73 @@ for (T.start in T_LMs) {
         select(all_of(c("id", "time", "event", "Years.bl", "age.fup", folds[[i]]$baseline.covs, folds[[i]]$candidate.long.covs)))
       
       # -----------------------------------------------------------------------------------  
-      # pencal - Fit model
+      # MFPCCox - Initialize multivar array
       # -----------------------------------------------------------------------------------
-      res <- run_prc_steps(
-        long.data = training.long, 
-        surv.data = training.surv,
-        baseline.covs = folds[[i]]$baseline.covs,
-        y.names = folds[[i]]$candidate.long.covs, # where did you specify baseline covariates
-        n.boots = 0,
-        n.cores = parallel::detectCores(),
-        verbose = TRUE,
-        penalty = penalty,
-        standardize = is_standardized == "std"
-      )
-      # -----------------------------------------------------------------------------------
+      # The scaling sould be done within the fold, because the scaling table change on the training data
+      if (is_scaled == "scaled") {
+        print("[Reminder] scaling is in effect.")
+        long.all <- Scale_covariates(data.long, folds[[i]]$scaling_table)
+      } else {
+        print("[Reminder] no scaling has been done")
+        long.all <- data.long
+      }
+      
+      # This multivar array will be shared between train set and test set by indexing
+      multivar <- Convert_long_to_mvarray(
+        long = long.all, # Full long data, scaled or not scaled
+        y.t = y.t, # Time variable used to prepare multivar
+        obstime = obstime, # Vector of time to prepare multivar
+        subject_id = subject.id, # Provide the order of subject ids in multivar
+        n_subject = nPat, 
+        y.names = y.names, # Long covariates for multivar
+        n.y = n.y)
       
       # -----------------------------------------------------------------------------------
-      # pencal - Store results
+      # MFPCCox - fit model
+      # -----------------------------------------------------------------------------------
+      res <- Train_MFPCCox(
+        training.surv = training.surv,
+        multivar = multivar, # Converted long data
+        subject.id = subject.id, # Vector of subject ids corresponding to multivar
+        y.names = y.names, # Candidate long covariates
+        baseline.covs = baseline.covs,
+        argvals = argvals, # Scaled time domain
+        pve = pve, # Hyperparam to choose number of pc
+        nbasis = 3 # Number of basis for mean function
+      )
+      
+      # -----------------------------------------------------------------------------------
+      # Store results
       # -----------------------------------------------------------------------------------
       folds[[i]]$model <- list(
-        name = model.name,
+        name = model.name, 
         hyperparam = model.hyperparam,
         covariate = list(
           base = folds[[i]]$baseline.covs,
           long = folds[[i]]$candidate.long.covs),
-        step1 = res$step1,
-        step2 = res$step2,
-        step3 = res$step3,
+        mfpccox = res$mfpccox,
+        mfpca.train = res$mfpca.train,
+        phi.train = res$phi.train,
+        npc.train = res$npc.train,
+        y.names = y.names,
+        subject.id = subject.id, # vector of subject id corresponding to multivar array
+        obstime = obstime,
+        argvals = argvals,
+        multivar = multivar,
         training.time = res$runtimes
       )
-  #  }
-    # -----------------------------------------------------------------------------------
-    # Initialize result
-  #  folds.eval <- vector(mode = "list", length = n_fold)
-    
-  #  for (i in 1:n_fold) {
       print("---------------------------------------------------------------------------------------------------")
       print(paste("Seed", seed, "- Start testing in fold", i))
       # -----------------------------------------------------------------------------------
       # General - Subset subjects for fold i
       # -----------------------------------------------------------------------------------
-      tmp <- Get_train_test_data(
-        data.surv = data.surv, 
-        data.long = data.long,  
-        ids.test = folds[[i]]$ids.test, 
-        is_scaled = is_scaled, 
-        scaling_table = folds[[i]]$scaling_table
-      )
+      # tmp <- Get_train_test_data(
+      #   data.surv = data.surv, 
+      #   data.long = data.long,  
+      #   ids.test = folds[[i]]$ids.test, 
+      #   is_scaled = is_scaled, 
+      #   scaling_table = folds[[i]]$scaling_table
+      # )
       
       surv.new <- tmp$testing.surv
       long.new <- tmp$testing.long
@@ -328,48 +383,66 @@ for (T.start in T_LMs) {
                         folds[[i]]$baseline.covs, 
                         folds[[i]]$candidate.long.covs)))
       
+      # -----------------------------------------------------------------------------------
+      # MFPCCox specific landmarking process
+      # -----------------------------------------------------------------------------------
+      # -----------------------------------------------------------------------------------
+      # Subset test data from multivar array
+      is_test <- folds[[i]]$model$subject.id %in% surv.new$id # Get subjects at-risk that are event-free at landmark time, t  
+      tmp.data <- multivar[is_test, , ] # subset longitudinal outcomes for test set
+      
+      # Need multivar.train for fold i in UFPCA step
+      is_train <- folds[[i]]$model$subject.id %in% training.surv$id # Get (row indices of) subjects in train set
+      multivar.train <- multivar[is_train, , ] # Subset for train set
+      
       # -----------------------------------------------------------------------------------  
-      # pencal - Evaluate model
+      # MFPCCox - Evaluate model
       # ----------------------------------------------------------------------------------- 
-      # Extract fitted models
-      step1 <- folds[[i]]$model$step1
-      step2 <- folds[[i]]$model$step2
-      step3 <- folds[[i]]$model$step3
-      
-      # Obtain predicted random effect
-      # res object comes from fitted pencal
-      preds <- survpred_prclmm(
-        step1 = step1, 
-        step2 = step2, 
-        step3 = step3,
-        times = deltaT, # Prediction window(s) for surv prob prediction
-        new.longdata = long.new, # Long data in test set
-        new.basecovs = surv.new, # Surv data in test set
-        keep.ranef = TRUE 
-      )
       # -----------------------------------------------------------------------------------  
-      # Obtain new X for predict on pcox.orig
-      # With baseline covariate, may need to expand into without baseline covariate case later
-      # -----------------------------------------------------------------------------------
-      X0.new <- model.matrix(as.formula(step3$call$baseline.covs),
-                         data = surv.new)
-      # Join the baseline covariates and predicted random effect summary
-      pred_ranefs <- preds$predicted_ranefs
-      testing.x.mat <- as.matrix(cbind(X0.new, as.matrix(pred_ranefs)))
+      # MFPCCox - uFPCA
+      # ----------------------------------------------------------------------------------- 
+      # univariate FPC 
+      Xi.test <- NULL # Xi: FPC scores
       
-      # Drop intercept
-      contains.int <- "(Intercept)" %in% colnames(testing.x.mat)
-      if (contains.int) {
-        testing.x.mat <- testing.x.mat[, -1]
+      for(p in 1:n.y){ # for each longitudinal covariate
+        
+        print(paste("Computing score for ", folds[[i]]$model$y.names[[p]]))
+        
+        npc.trained <- folds[[i]]$model$npc.train[[p]]
+        
+        # estimated trajectories based on a truncated Karhunen-Loeve representation on pred data
+        tmp.ufpca <- uPACE(
+          testData = multivar.train[, , p], # Specific to train set in each fold
+          domain = folds[[i]]$model$argvals, # Should be set of constant
+          predData = tmp.data[, , p], 
+          nbasis = nbasis,
+          #pve = pve,
+          npc = npc.trained)
+        
+        Xi.test <- cbind(Xi.test, tmp.ufpca$scores) # dynamic FPC scores for test subjects 
       }
+      # -----------------------------------------------------------------------------------  
+      # MFPCCox - MFPCA
+      # ----------------------------------------------------------------------------------- 
+      # estimate MFPC scores for test subjects
+      rho.test <- mfpca.score(Xi.test, folds[[i]]$model$mfpca.train$Cms)
+      #tmp.surv.data$rho <- rho.test  
+      
       # -----------------------------------------------------------------------------------
-      # Compute the linear predictor
-      # -----------------------------------------------------------------------------------
+      # MFPCCox - Compute the linear predictor
+      # ----------------------------------------------------------------------------------- 
+      tmp.rho <- data.frame(rho.test)
+      rho.names <- paste0("rho", 1:ncol(rho.test))
+      names(tmp.rho) <- rho.names
+      tmp.surv.data <- data.frame(surv.new, tmp.rho)
+      
+      X.orig <- tmp.surv.data %>%
+        select(all_of(baseline.covs), all_of(rho.names))
+      
       linpred <- predict(
-        object = step3$pcox.orig, # Fitted "cv.glmnet" or "cv.relaxed" object
-        newx = testing.x.mat, # Matrix of new values for x at which predictions are to be made. Must be a matrix
-        s = glmnet.lambda,
-        type = "link" # Type "link" (default) returns x^T \beta
+        object = folds[[i]]$model$mfpccox, # Fitted "coxph" object
+        newdata = X.orig, # new values for x at which predictions are to be made
+        type = "lp" # Type "link" (default) returns x^T \beta
       )
       # -----------------------------------------------------------------------------------
       
@@ -385,7 +458,7 @@ for (T.start in T_LMs) {
       )
       # -----------------------------------------------------------------------------------
       # -----------------------------------------------------------------------------------
-      # Specific - Compute Brier score
+      # MFPCCox Specific - Compute Brier score (work in progress!!!!!!!!!!!!!!!!!!!!!!!)
       # -----------------------------------------------------------------------------------
       
       # pec will return error if the prediction time exceeds the latest survival time in test set
@@ -395,47 +468,13 @@ for (T.start in T_LMs) {
       pec.times <- deltaT
       pec.times <- pec.times[pec.times <= T.max.test]
       
-      
-      # In order to use Survfit for glmnet, format X and y
-      
-      # Model matrix, of dimension n obs x n vars; each row is an observation vector
-      
-      X0.train <- model.matrix(as.formula(step3$call$baseline.covs),
-                         data = training.surv)
-      # Join the baseline covariates and random effect summary in step 2
-      training.x.mat <- as.matrix(cbind(X0.train, as.matrix(step2$ranef.orig)))
-      
-      # Drop intercept
-      contains.int <- "(Intercept)" %in% colnames(training.x.mat)
-      if (contains.int) {
-        training.x.mat <- training.x.mat[, -1]
-      }
-
-      # Response
-      training.y <- survival::Surv(
-        time = training.surv$time,
-        event = training.surv$event,
-        type = "right"
-      )
-      
-      # Compute predicted survival probabilities at times
-      res.survfit <- summary(
-        survival::survfit(
-          step3$pcox.orig, 
-          x = training.x.mat, y = training.y,
-          s = glmnet.lambda, 
-          newx = testing.x.mat),
-        times = pred.times
-      )
-      
-      pred.surv.prob <- t(res.survfit$surv)
-      
+      # MFPCCox uses coxph, can feed the trained model to pec, given that the coxph call above has argument X=TRUE to retain X matrix in output
       brier <- tryCatch({
         res.bs <- pec::pec(
           # A matrix with predicted probabilities, dimension of n subjects by m times 
-          object = list("model" = pred.surv.prob),
+          object = list("model" = folds[[i]]$model$mfpccox),
           formula = Surv(time, event) ~ AGE,
-          data = surv.new, # For computing IPCW
+          data = tmp.surv.data, # For computing IPCW
           exact = FALSE, # Do not predict at event times
           times = pec.times, 
           #times = 0:15, 
