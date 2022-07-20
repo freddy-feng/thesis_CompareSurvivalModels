@@ -1,6 +1,7 @@
 # ------------------------------------------------------------------------------------------------
 # Contains wrapper function, utility function for running experiment using pencal library
 # ------------------------------------------------------------------------------------------------
+install.packages("pencal", )
 require(tidyverse)
 require(pencal)
 print(paste("pencal version =", packageVersion("pencal")))
@@ -17,7 +18,9 @@ run_prc_steps <- function(
     n.cores = 1,
     verbose = FALSE,
     penalty = "ridge",
-    standardize = TRUE){
+    standardize = TRUE,
+    pfac.base.covs = 0 # vector of binary value(s) to indicate regularization for baseline covariates
+  ) {
   
   # Fit PRC model steps 1 to 3
   # Input:
@@ -71,7 +74,9 @@ run_prc_steps <- function(
     baseline.covs = as.formula(paste("~", paste(baseline.covs, collapse = "+"))),
     penalty = penalty,
     standardize = standardize,
-    n.cores = n.cores)
+    pfac.base.covs = pfac.base.covs, # Change it to a vector to penalize baseline covariates
+    n.cores = n.cores
+    )
   
   t.end <- Sys.time()
   t.step3 <- as.numeric(difftime(t.end, t.start, units = "mins"))

@@ -84,7 +84,7 @@ consort.id.interim3[is_DXbl_Dem] <- NA
 #paste("[Count] Subjects removed from previous =", sum(!is.na(consort.id.DXbl_Dem)))
 
 # -----------------------------------------------------------------------------
-ids_DX_allNA <- df.clean %>%
+ids_DX_allNA <- adnimerge %>%
   filter(VISCODE != "bl") %>%
   group_by(RID) %>%
   dplyr::summarise(
@@ -350,7 +350,7 @@ res.transformation <- Transform_covariates(
 Plot_transformation(
   data.long = data.long,
   data.long.transformed = res.transformation$data.long.transformed,
-  y.stats.transformed = res.transformation$summary
+  summary = res.transformation$summary
 )
 
 df.long_censored_transformed <- res.transformation$data.long.transformed
@@ -407,7 +407,7 @@ save(df.surv_preds,
      df.long_censored,
      df.long_censored_transformed,
      transformation_summary,
-     file = "adni_cleaned.RData")
+     file = "./data_cleaned/adni_cleaned.RData")
 
 print("Finished data preparation for adni_cleaned.RData")
 # -----------------------------------------------------------------------------

@@ -14,7 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #rm(list = ls())
 
 #library(pencal)
-#install.packages("./package/pencal_1.2.1.tar.gz", repos = NULL, type="source")
+#install.packages("./package/pencal_1.2.2.tar.gz", repos = NULL, type="source")
 
 source("function_utility_exp.R")
 source("function_evaluation.R")
