@@ -1,7 +1,7 @@
 on.alice <- F
 
 # Set folder path on ALICE
-folder.alice <- "/data1/s2887592/pencal"
+folder.alice <- "/data1/s2887592/exp_all"
 if (on.alice) setwd(folder.alice)
 
 # -----------------------------------------------------------------------------------
@@ -25,7 +25,7 @@ select <- dplyr::select
 # -----------------------------------------------------------------------------------
 n_fold <- 10 # Cross validation
 n_RCV <- 10 # Repeated CV, set to 1 to single CV
-T_LMs <- c(2) # Vector of landmark times
+T_LMs <- c(2, 3, 4, 5, 6) # Vector of landmark times
 
 seeds <- 721:(721+n_RCV-1) # Seeds for RCV
 
@@ -33,16 +33,29 @@ seeds <- 721:(721+n_RCV-1) # Seeds for RCV
 # Set model hyperparam
 
 # model selection criteria
-#method <- "pencal-min"
-method <- "pencal-1se"
+method <- "pencal"
 
-if (method == "pencal-1se") {
-  glmnet.lambda <- "lambda.1se"  
-} else if (method == "pencal-min") {
-  glmnet.lambda <- "lambda.min"
-}
 
-penalty <- "ridge"
+glmnet.lambda.select <- "lambda.min"
+#glmnet.lambda.select <- "lambda.1se"
+
+penalty.type <- "ridge"
+
+pfac.base.covs <- 0
+add.label <- "pbaseNo"
+
+# pfac.base.covs <- c(0, 1, 1, 1, c(1, 1))
+# add.label <- "pbase"
+
+# pfac.base.covs <- c(1, 1, 1, 1, c(1, 1))
+# add.label <- "pbaseAge"
+
+method.full <- paste(c(
+  method,
+  stringr::str_split(glmnet.lambda.select, pattern = "\\.")[[1]][2], 
+  penalty.type,
+  add.label),
+  collapse = "-")
 
 # -----------------------------------------------------------------------------------
 # Set data param
@@ -71,16 +84,18 @@ for (T.start in T_LMs) {
   
   model.hyperparam <- list(
     method = method,
+    method.full = method.full,
     set_scenario = set_scenario,
     landmark = landmark,
     is_scaled = is_scaled,
     is_transformed = is_transformed,
     is_standardized = is_standardized,
-    penalty = penalty
+    penalty = penalty.type,
+    glmnet.lambda.select = glmnet.lambda.select
   )
   
-  hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled, is_standardized, penalty), collapse = "_") # Use hyperparam to describe model
-  model.name <- paste(c(method, landmark, hyperparam), collapse = "_")
+  hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled, is_standardized), collapse = "_") # Use hyperparam to describe model
+  model.name <- paste(c(method.full, landmark, hyperparam), collapse = "_")
   # -----------------------------------------------------------------------------------
   
   # -----------------------------------------------------------------------------------
@@ -181,6 +196,12 @@ for (T.start in T_LMs) {
     print("[Remind] pCox method is used, the additional covariates will be updated")
   }
   # -----------------------------------------------------------------------------------
+  # Shift timescale T.start -> 0
+  deltaT <- deltaT - T.start
+  data.surv$time <- data.surv$time - T.start
+  data.long$time <- data.long$time - T.start
+  data.long$Years.bl <- data.long$Years.bl - T.start
+  # -----------------------------------------------------------------------------------
   # Middle loop - seed for repeated CV
   for (seed in seeds) { # Vary seed for repeated CV
 #  for (seed in 721:721) { # Only run once
@@ -212,13 +233,13 @@ for (T.start in T_LMs) {
     
     # -----------------------------------------------------------------------------------
     # Save folds for training and future checking
-    subfolder <- "./output/temp/"
-    filename <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
-    path.template <- paste0(subfolder, filename)
-    
-    save(folds, file = path.template)
-    
-    print(paste("template of folds saved to path:", path.template))
+    # subfolder <- "./output/temp/"
+    # filename <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
+    # path.template <- paste0(subfolder, filename)
+    # 
+    # save(folds, file = path.template)
+    # 
+    # print(paste("template of folds saved to path:", path.template))
     
     # -----------------------------------------------------------------------------------
     # You may want to double check data.long and data.surv before proceeding to training.
@@ -234,11 +255,11 @@ for (T.start in T_LMs) {
     print(paste("Begin training for model:", model.name))
     # -----------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------
-    rm("folds")
-    rm("folds.eval")
-    
-    print(path.template)
-    load(file = path.template) # Load folds template
+    # rm("folds")
+    # rm("folds.eval")
+    # 
+    # print(path.template)
+    # load(file = path.template) # Load folds template
     
     folds.eval <- vector(mode = "list", length = n_fold)
     # -----------------------------------------------------------------------------------
@@ -278,8 +299,9 @@ for (T.start in T_LMs) {
         n.boots = 0,
         n.cores = parallel::detectCores(),
         verbose = TRUE,
-        penalty = penalty,
-        standardize = is_standardized == "std"
+        penalty = penalty.type,
+        standardize = is_standardized == "std",
+        pfac.base.covs = pfac.base.covs
       )
       # -----------------------------------------------------------------------------------
       
@@ -368,7 +390,7 @@ for (T.start in T_LMs) {
       linpred <- predict(
         object = step3$pcox.orig, # Fitted "cv.glmnet" or "cv.relaxed" object
         newx = testing.x.mat, # Matrix of new values for x at which predictions are to be made. Must be a matrix
-        s = glmnet.lambda,
+        s = glmnet.lambda.select,
         type = "link" # Type "link" (default) returns x^T \beta
       )
       # -----------------------------------------------------------------------------------
@@ -423,7 +445,7 @@ for (T.start in T_LMs) {
         survival::survfit(
           step3$pcox.orig, 
           x = training.x.mat, y = training.y,
-          s = glmnet.lambda, 
+          s = glmnet.lambda.select, 
           newx = testing.x.mat),
         times = pred.times
       )
@@ -434,7 +456,8 @@ for (T.start in T_LMs) {
         res.bs <- pec::pec(
           # A matrix with predicted probabilities, dimension of n subjects by m times 
           object = list("model" = pred.surv.prob),
-          formula = Surv(time, event) ~ AGE,
+#          formula = Surv(time, event) ~ AGE,
+          formula = Surv(time, event) ~ AGE + PTGENDER + PTEDUCAT + status.bl + APOE4,
           data = surv.new, # For computing IPCW
           exact = FALSE, # Do not predict at event times
           times = pec.times, 

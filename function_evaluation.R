@@ -15,8 +15,9 @@ Evaluate_tdauc <- function(
   res.fp <- vector(mode = "list", length = length(deltaT))
   res.tdauc <- vector(mode = "numeric", length = length(deltaT))
   
-  # Remove deltaT before landmark time
-  deltaT <- deltaT[deltaT > T.start]
+  # This line is no more required after shifting the time scale
+  # # Remove deltaT before landmark time
+  # deltaT <- deltaT[deltaT > T.start]
   
   for (j in 1:length(deltaT)) {
     
@@ -61,7 +62,7 @@ Evaluate_tdauc <- function(
 # ------------------------------------------------------------------------------------------------
 # Summarize tdAUC in different folds from folds.eval and output dataframe
 # ------------------------------------------------------------------------------------------------
-Summarize.tdAUC <- function(name, path, detlaT) {
+Summarize.tdauc <- function(name, path, deltaT) {
   # Load folds.eval
   load(path)
   
@@ -69,10 +70,10 @@ Summarize.tdAUC <- function(name, path, detlaT) {
   
   # Extract from folds.eval into list of tdAUC
   list.tdauc <- lapply(1:n_fold, function(i) {
-    deltaT.eval <- folds.eval[[i]]$perf$deltaT # in case deltaT in fold.eval > deltaT
-    folds.eval[[i]]$perf$tdauc[deltaT.eval %in% detlaT]
+    # in case deltaT in fold.eval > deltaT
+    deltaT.eval <- folds.eval[[i]]$perf$deltaT + folds.eval[[i]]$perf$landmark # shift back the scale
+    folds.eval[[i]]$perf$tdauc[deltaT.eval %in% deltaT]
   })
-  
   
   # Convert list into data frame
   df.tdauc <- data.frame(do.call(rbind, list.tdauc)) # row i = fold i
@@ -94,7 +95,6 @@ Summarize.tdAUC <- function(name, path, detlaT) {
       ci.lower = quantile(tdAUC, 0.025, na.rm = TRUE)
     ) 
   
-  
   df.tdauc$prediction_time <- as.numeric(df.tdauc$prediction_time)
   df.tdauc <- df.tdauc %>% arrange(prediction_time)
   
@@ -102,6 +102,7 @@ Summarize.tdAUC <- function(name, path, detlaT) {
   df.tdauc$model.id <- name # Different seed, different model name
   df.tdauc$model.name <- folds.eval[[1]]$model.info$name
   df.tdauc$method <- folds.eval[[1]]$model.info$hyperparam$method
+  df.tdauc$method.full <- folds.eval[[1]]$model.info$hyperparam$method.full
   df.tdauc$scenario <- folds.eval[[1]]$model.info$hyperparam$set_scenario
   df.tdauc$landmark <- folds.eval[[1]]$model.info$hyperparam$landmark
   df.tdauc$n_bl.covariate <- length(folds.eval[[1]]$model.info$covariate$base)
@@ -114,9 +115,11 @@ Summarize.tdAUC <- function(name, path, detlaT) {
 # ------------------------------------------------------------------------------------------------
 # Summarize C-index in different folds from folds.eval and output dataframe
 # ------------------------------------------------------------------------------------------------
-Summarize.c.index <- function(model, path, n_fold) {
+Summarize.c.index <- function(model, path) {
   # Load results to folds.eval list for corresponding model
   load(path)
+  
+  n_fold <- length(folds.eval)
   
   # Extract from folds.eval into list of tdAUC
   vec.c.index <- sapply(1:n_fold, function(i) {
@@ -127,8 +130,9 @@ Summarize.c.index <- function(model, path, n_fold) {
   df.c.index <- data.frame(c.index = vec.c.index) # row i = fold i
   
   # Get model information, identical over all folds
-  df.c.index$model <- folds.eval[[1]]$model.info$name
+  df.c.index$model.name <- folds.eval[[1]]$model.info$name
   df.c.index$method <- folds.eval[[1]]$model.info$hyperparam$method
+  df.c.index$method.full <- folds.eval[[1]]$model.info$hyperparam$method.full
   df.c.index$scenario <- folds.eval[[1]]$model.info$hyperparam$set_scenario
   df.c.index$landmark <- folds.eval[[1]]$model.info$hyperparam$landmark
   df.c.index$n_bl.covariate <- length(folds.eval[[1]]$model.info$covariate$base)
@@ -167,7 +171,7 @@ Plot_all_tdROC <- function(folds.eval) {
 # Summarize Brier score in different folds from folds.eval and output dataframe
 # ------------------------------------------------------------------------------------------------
 # Note that the length of Brier score may be shorter in some folds if test set does not contain survival times after the floor(T.max)
-Summarize.brier <- function(name, path, detlaT) {
+Summarize.brier <- function(name, path, deltaT) {
   # Load folds.eval
   load(path)
   
@@ -175,7 +179,8 @@ Summarize.brier <- function(name, path, detlaT) {
   
   # Extract from folds.eval into list of Brier
   list.brier <- lapply(1:n_fold, function(i) {
-    deltaT.eval <- folds.eval[[i]]$perf$deltaT # in case deltaT in fold.eval > deltaT
+    # in case deltaT in fold.eval > deltaT
+    deltaT.eval <- folds.eval[[i]]$perf$deltaT + folds.eval[[i]]$perf$landmark # shift back the scale
     brier <- folds.eval[[i]]$perf$brier
     missing <- length(deltaT.eval) - length(brier)
     if (missing > 0) {
@@ -213,6 +218,7 @@ Summarize.brier <- function(name, path, detlaT) {
   df.brier$model.id <- name # Different seed, different model name
   df.brier$model.name <- folds.eval[[1]]$model.info$name
   df.brier$method <- folds.eval[[1]]$model.info$hyperparam$method
+  df.brier$method.full <- folds.eval[[1]]$model.info$hyperparam$method.full
   df.brier$scenario <- folds.eval[[1]]$model.info$hyperparam$set_scenario
   df.brier$landmark <- folds.eval[[1]]$model.info$hyperparam$landmark
   df.brier$n_bl.covariate <- length(folds.eval[[1]]$model.info$covariate$base)

@@ -1,0 +1,709 @@
+---
+title: "Untitled"
+author: "Yibin Feng"
+date: '2022-07-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Purpose
+This markdown is for extracting folds.eval and visualize the results in tables and figures.
+
+# Dependencies
+```{r}
+# Dependencies
+library(tidyverse)
+library(ggrepel)
+
+source("function_utility.R")
+source("function_evaluation.R")
+```
+
+# Load results (folds.eval) to vector of names and paths from directory
+```{r}
+# Where the folds.eval are placed
+#folderpath <- "./output/comparison/" # copy folds.eval to here for selected comparison
+folderpath <- "./output/" # Immediate output location of folds.eval
+n_fold <- 10
+deltaT <- 1:15
+
+models.path <- list.files(path = folderpath) # Using repeated measurements up to landmark time
+
+# Filter folds.eval files only
+models.path <- models.path[grepl(pattern = "eval_", x = models.path)]
+
+# Filter by landmark
+#models.path <- models.path[grepl(pattern = "lm2", x = models.path) | grepl(pattern = "lm0", x = models.path)] # Chose landmark
+
+# Extract model names
+models.name <- stringr::str_remove_all(stringr::str_remove_all(models.path, ".RData"), "eval_")
+
+# Check number of models loaded
+print(paste("Number of folds.eval available:", length(models.name)))
+```
+
+# tdAUC
+## Consolidate
+```{r}
+# --------------------------------------------------
+# Summarize tdAUC results
+# --------------------------------------------------
+Combine_res_tdauc <- function(
+    models.name, models.path, T.start, deltaT
+) {
+  # Initialize
+  df.tdauc.compare <- data.frame()
+
+  deltaT <- deltaT[deltaT > T.start]
+  
+  is_lm <- grepl(models.name, pattern = paste0("lm", T.start))
+  models.name.valid <- models.name[is_lm]
+  models.path.valid <- models.path[is_lm]
+# --------------------------------------------------
+  
+  # Repeat the following steps for different models
+  
+  for (i in 1:length(models.name.valid)) {
+    
+    name <- models.name.valid[i]
+    path <- models.path.valid[i]
+      
+    if (i == 1) {
+      # For first model to initialize dataframe
+      df.tdauc <- Summarize.tdauc(
+        name = name,
+        path = paste0(folderpath, path),
+        deltaT = deltaT
+        )
+      
+      df.tdauc.compare <- df.tdauc
+    } else {  #  i > 1
+      df.tdauc <- Summarize.tdauc(
+        name = name,
+        path = paste0(folderpath, path),
+        deltaT = deltaT
+      )
+    
+      # Combine results from other models to compare dataframe
+      df.tdauc.compare <- df.tdauc.compare %>%
+        add_row(df.tdauc)
+    }
+  }
+  return(df.tdauc.compare)
+}
+# --------------------------------------------------
+
+# Example
+# T.start <- 2
+# deltaT <- 1:15
+# df.tdauc.compare <- Combine_res_tdauc(models.name, models.path, T.start, deltaT)
+# dim(df.tdauc.compare)
+```
+
+```{r}
+# --------------------------------------------------
+# Summarize over all landmark times
+
+list.tdauc.lms <- lapply(2:6, function(T.start) {
+  df.tdauc.compare <- Combine_res_tdauc(models.name, models.path, T.start, deltaT)
+  
+  return(list(
+    landmark = T.start,
+    df.tdauc.compare = df.tdauc.compare
+  ))
+})
+# --------------------------------------------------
+# Check
+for (x in list.tdauc.lms) {
+  x$df.tdauc.compare %>%
+    group_by(method, method.full) %>%
+    summarize(n(), .groups = "drop") %>%
+    print()
+}
+```
+
+## Fig: tdAUC | LM (WARNING: group by method.full)
+
+```{r}
+# --------------------------------------------------
+# Create plots
+list.g.tdauc <- lapply(list.tdauc.lms, function(x) {
+  df <- x$df.tdauc.compare
+  t_landmark <- x$landmark
+  
+  g <- df %>% 
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            method.full = unique(method.full),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+#  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = repeated.CV.mean, 
+    group = method.full,
+    color = method.full
+)
+  ) +
+ # geom_errorbar(aes(
+ #   ymax = repeated.CV.max,
+ #   ymin = repeated.CV.min),
+ #   alpha = 0.3,
+ #   width = 0.3, size = 0.8) +
+  # landmark
+  geom_vline(xintercept = t_landmark, 
+             color = "grey80", linetype = "dashed", size = 1, alpha = 1) + 
+  geom_line(
+    aes(linetype = method), 
+    alpha = 0.8, size = 0.8
+    ) +
+  geom_point(
+    aes(shape = method), 
+    alpha = 0.8, size = 2.5
+    ) +
+  scale_x_continuous(breaks = 1:15) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(
+    xlim = c(0, 15),
+    ylim = c(0.7, 1)
+    ) +
+  ggsci::scale_color_lancet() +
+  xlab("Year from baseline") + ylab("tdAUC") +
+  labs(
+    title = "Comparison of estimated tdAUC under repeated 10-fold CV",
+    subtitle = paste("at landmark time", t_landmark),
+    caption = "CV repeated in 10 different seeds",
+#    caption = "Error bar represents the max and min",
+#    linetype = "number of (candidate) baseline covariates",
+    color = "Method variant",
+    linetype = "Method",
+    shape = "Method"
+  )  +
+  theme_pubr() +
+  theme(
+    legend.position = "right", 
+    legend.box = "vertical",
+    panel.grid.major.y = element_line(color = "grey60")
+    ) 
+  return(list(
+    landmark = t_landmark,
+    g = g
+  ))
+})
+```
+
+```{r, fig.width=12, fig.height=6}
+# Print
+for (x in list.g.tdauc) {
+  print(x$g)
+}
+
+# for (x in list.g.tdauc) {
+#   ggsave(
+#     filename = paste0("compare_tdauc_lm", x$landmark, ".png"),
+#     plot = x$g,
+#     device = "png",
+#     path = "./figure/compare_tdauc/",
+#     width = 12, height = 6
+#   )
+# }
+
+```
+
+## Draft: Compare all tdAUC in all LMs | MFPCCox only
+
+```{r}
+# --------------------------------------------------
+# Create plots
+list.g.tdauc <- lapply(list.tdauc.lms, function(x) {
+  df <- x$df.tdauc.compare
+  t_landmark <- x$landmark
+  
+  g <- df %>%
+  filter(method == "MFPCCox") %>%
+  group_by(prediction_time, model.name) %>%
+  summarize(repeated.CV.mean = mean(mean),
+            repeated.CV.max = max(mean),
+            repeated.CV.min = min(mean),
+            method = unique(method),
+            method.full = unique(method.full),
+            n_bl.covariate = unique(n_bl.covariate),
+            .groups = "drop") %>%
+#  mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+  ggplot(aes(
+    x = prediction_time, 
+    y = repeated.CV.mean, 
+    group = method.full,
+    color = method.full
+)
+  ) +
+ # geom_errorbar(aes(
+ #   ymax = repeated.CV.max,
+ #   ymin = repeated.CV.min),
+ #   alpha = 0.3,
+ #   width = 0.3, size = 0.8) +
+  geom_vline(xintercept = t_landmark, 
+             color = "grey80", linetype = "dashed", size = 1, alpha = 1) + # landmark
+  geom_line(
+    aes(linetype = method.full), 
+    alpha = 0.8, size = 0.8
+    ) +
+  geom_point(
+    aes(shape = method.full), 
+    alpha = 0.8, size = 2.5
+    ) +
+  scale_x_continuous(breaks = 1:15) + 
+  scale_y_continuous(breaks = 0:10 / 10) +
+  coord_cartesian(
+    xlim = c(0, 15),
+    ylim = c(0.7, 1)
+    ) +
+  ggsci::scale_color_lancet() +
+  xlab("Year from baseline") + ylab("tdAUC") +
+  labs(
+    title = "Comparison of estimated tdAUC under repeated 10-fold CV",
+    subtitle = paste("at landmark time", t_landmark),
+    caption = "CV repeated in 10 different seeds",
+#    caption = "Error bar represents the max and min",
+#    linetype = "number of (candidate) baseline covariates",
+    color = "Method",
+    shape = "Method",
+    linetype = "Method"
+  )  +
+  theme_pubr() +
+  theme(
+    legend.position = "right", 
+    legend.box = "vertical",
+    panel.grid.major.y = element_line(color = "grey60")
+    ) 
+  return(list(
+    g = g
+  ))
+})
+```
+
+```{r, fig.width=12, fig.height=6}
+# Print
+for (x in list.g.tdauc) {
+  print(x$g)
+}
+```
+
+
+# C index 
+
+## Consolidate
+```{r}
+# --------------------------------------------------
+# Summarize C-index results
+# --------------------------------------------------
+
+# Initialize
+df.c.index.compare <- data.frame()
+# ------------------------------------------------------------------------------------------------
+
+for (i in 1:length(models.name)) {
+  
+  if (i == 1) {
+    # Result 1
+    df.c.index <- Summarize.c.index(
+      model = models.name[i], 
+      path = paste0(folderpath, models.path[i])
+      )
+    
+    df.c.index.compare <- df.c.index
+  } else {
+    # Result i, i > 1
+    df.c.index <- Summarize.c.index(
+      model = models.name[i], 
+      path = paste0(folderpath, models.path[i])
+      )
+    
+    # Combine results from other models to compare dataframe
+    df.c.index.compare <- df.c.index.compare %>%
+      add_row(df.c.index)  
+  }
+}
+# --------------------------------------------------
+# Check
+df.c.index.compare %>%
+    group_by(method, method.full) %>%
+    summarize(n(), .groups = "drop") %>%
+    print()
+```
+
+## Figure: c-index | LM (group by method.full)
+
+```{r}
+# --------------------------------------------------
+# Plot df.c.index.compare
+# --------------------------------------------------
+g_caption <- paste0(
+  "CV repeated with 10 different seeds.\n",
+  "Box plot refer to the IQR (from first to third percentile).\n",
+  "Whiskers extend from 1.5*IQR for either end of the IQR box."
+  )
+
+g_title <- "Comparison of estimated C-index under repeated 10-fold CV"
+
+
+
+# https://ggplot2.tidyverse.org/reference/geom_boxplot.html
+list.g.c <- lapply(2:6, function(t_landmark) {
+    g <- df.c.index.compare %>%
+    filter(landmark == paste0("lm", t_landmark)) %>%
+    # filter(grepl(model, pattern = "scaled")) %>% # dumb method to filter based on method.full
+    # filter(grepl(model, pattern = "scenario2")) %>%
+  #  filter(scenario == "scenario2" | scenario == "scenario0") %>%
+  #  filter(method == "pCox-lm" | method == "pencal" | method == "pCox-bl" | method == "pencal-min" | method == "pencal-1se") %>%
+    ggplot(aes(
+      x = method.full, 
+      y = c.index, 
+      fill = method.full,
+      color = method.full)) + 
+      geom_point(
+        aes(shape = method),
+        position = position_jitter(seed = 1, width = 0.2),
+        alpha = 0.2, 
+        size = 1
+        ) +
+      geom_violin(
+        color = NA,
+        width = 0.5, 
+        alpha = 0.2
+        ) + 
+      geom_boxplot(
+        fill = "white",
+        lwd = 0.8,
+        width = 0.1,
+        alpha = 1,
+        outlier.shape = NA
+        ) + 
+      coord_cartesian(ylim = c(0.5, 1)) +
+      ggsci::scale_color_lancet() +
+      ggsci::scale_fill_lancet() +
+      xlab("") + ylab("C-index") +
+      labs(
+        title = paste0("Landmark time =", t_landmark),
+#        caption = g_caption,
+        color = "Method",
+        fill = "Method",
+        shape = "Method"
+        ) + 
+      theme_pubr() +
+      theme(
+        legend.position = "right",
+        legend.box = "vertical",
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(color = "grey60"),
+        panel.grid.minor.y = element_line(color = "grey80")
+      )
+    
+    return(g)
+})
+```
+
+Inspect per landmark time
+```{r, fig.width=12, fig.height=6}
+list.g.c[[1]]
+```
+
+
+```{r, fig.width=16, fig.height=8}
+g.c.wrapped <- ggpubr::ggarrange(
+  plotlist = list.g.c, 
+  ncol = 3, nrow = 2, 
+  common.legend = TRUE
+)
+
+g.c.wrapped
+
+# ggsave(
+#     filename = paste0("compare_c_wrapped.png"),
+#     plot = g.c.wrapped,
+#     device = "png",
+#     path = "./figure/compare_c/",
+#     width = 16, height = 8,
+#     bg = "white"
+# )
+```
+
+## Figure: combined c-index | LM (group by method)
+```{r, fig.width=16, fig.height=8}
+g_caption <- paste0(
+  "CV repeated with 10 different seeds.\n",
+  "Box plot refer to the IQR (from first to third percentile).\n",
+  "Whiskers extend from 1.5*IQR for either end of the IQR box."
+  )
+
+g_title <- "Comparison of estimated C-index under repeated 10-fold CV"
+
+
+g.c.combined <- df.c.index.compare %>%
+  mutate(landmark = as.numeric(
+    stringr::str_split(landmark, pattern = "lm", simplify =  TRUE)[, 2])
+    ) %>%
+  ggplot(aes(
+      x = method, 
+      y = c.index, 
+      group = interaction(landmark, method),
+      fill = method,
+      color = method)) + 
+      geom_violin(
+        color = NA,
+        width = 0.8, 
+        alpha = 0.3
+        ) + 
+      geom_boxplot(
+        fill = NA, color = "black",
+        lwd = 0.5,
+        width = 0.2, 
+        position = position_dodge(width = 0.8),
+        alpha = 1,
+        outlier.shape = NA
+        ) + 
+      coord_cartesian(ylim = c(0.5, 1)) +
+      ggsci::scale_color_lancet() +
+      ggsci::scale_fill_lancet() +
+      xlab("") + ylab("C-index") +
+      labs(
+        title = "Comparison of estimated C-index under repeated 10-fold CV",
+        subtitle = "at landmark times 2 (left) to 6 (right)",
+        caption = g_caption,
+        color = "Method",
+        fill = "Method"
+        ) + 
+      theme_pubr() +
+      theme(
+        legend.position = "top",
+        legend.box = "vertical",
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(color = "grey60"),
+        panel.grid.minor.y = element_line(color = "grey80")
+      )
+
+g.c.combined
+
+# ggsave(
+#     filename = paste0("compare_c_combined.png"),
+#     plot = g.c.combined,
+#     device = "png",
+#     path = "./figure/compare_c/",
+#     width = 16, height = 8,
+#     bg = "white"
+# )
+```
+
+
+
+# Brier score
+
+## Consolidate
+```{r}
+# --------------------------------------------------
+# Summarize Brier score results
+# --------------------------------------------------
+Combine_res_brier <- function(
+    models.name, models.path, T.start, deltaT
+) {
+  # Initialize
+  df.brier.compare <- data.frame()
+# --------------------------------------------------
+  deltaT <- deltaT[deltaT > T.start]
+  
+  is_lm <- grepl(models.name, pattern = paste0("lm", T.start))
+  models.name.valid <- models.name[is_lm]
+  models.path.valid <- models.path[is_lm]
+# --------------------------------------------------
+  
+  # Repeat the following steps for different models
+  
+  for (i in 1:length(models.name.valid)) {
+    
+    name <- models.name.valid[i]
+    path <- models.path.valid[i]
+      
+    if (i == 1) {
+      # For first model to initialize dataframe
+      df.brier <- Summarize.brier(
+        name = name,
+        path = paste0(folderpath, path),
+        deltaT = deltaT
+        )
+      
+      df.brier.compare <- df.brier
+    } else {
+      # Result i, i > 1
+      df.brier <- Summarize.brier(
+        name = name,
+        path = paste0(folderpath, path),
+        deltaT = deltaT
+        )
+      
+      # Combine results from other models to compare dataframe
+      df.brier.compare <- df.brier.compare %>%
+        add_row(df.brier)
+    }
+  }
+  return(df.brier.compare)
+}
+# --------------------------------------------------
+# Example
+# T.start <- 2
+# deltaT <- 1:15
+# 
+# df.brier.compare <- Combine_res_brier(models.name, models.path, T.start, deltaT)
+# 
+# dim(df.brier.compare)
+```
+
+```{r}
+# --------------------------------------------------
+# Summarize over all landmark times
+list.brier.lms <- lapply(2:6, function(i) {
+  T.start <- i
+  df.brier.compare <- Combine_res_brier(models.name, models.path, T.start, deltaT)
+  
+  return(list(
+    landmark = T.start,
+    df.brier.compare = df.brier.compare
+  ))
+})
+# --------------------------------------------------
+# Check
+# Check
+for (x in list.brier.lms) {
+  x$df.brier.compare %>%
+    group_by(method, method.full) %>%
+    summarize(n(), .groups = "drop") %>%
+    print()
+}
+```
+
+## Fig: BS | LM (group by method)
+```{r}
+g_title <- "Comparison of estimated Brier score under repeated 10-fold CV"
+g_caption <- paste0(
+  "CV repeated with 10 different seeds."
+  )
+
+# --------------------------------------------------
+# Create plots
+list.g.brier <- lapply(list.brier.lms, function(x) {
+# --------------------------------------------------
+  # Plot df.tdauc.compare
+# --------------------------------------------------
+  df <- x$df.brier.compare
+  t_landmark <- x$landmark
+  
+  g <- df %>% 
+  #  filter(scenario == "scenario2" | scenario == "scenario0") %>%
+    group_by(prediction_time, model.name) %>%
+    summarize(repeated.CV.mean = mean(mean),
+              repeated.CV.max = max(mean),
+              repeated.CV.min = min(mean),
+              method = unique(method),
+              method.full = unique(method.full),
+              n_bl.covariate = unique(n_bl.covariate),
+              .groups = "drop") %>%
+#    mutate(method.and.n_bl.cov = paste(method, n_bl.covariate, sep = "_")) %>%
+    # for label at last point
+    mutate(
+      label = if_else(
+        prediction_time == max(prediction_time), model.name, NA_character_)) %>%
+  #  filter(method == "pCox-lm" | method == "pencal" | method == "pCox-bl" | method == "pencal-min" | method == "pencal-1se") %>%
+  #  filter(n_bl.covariate == 26 | n_bl.covariate == 5) %>%
+    ggplot(aes(
+      x = prediction_time, 
+      y = repeated.CV.mean, 
+      group = method.full,
+      color = method.full)
+    ) +
+   # geom_errorbar(aes(
+   #   ymax = repeated.CV.max,
+   #   ymin = repeated.CV.min),
+   #   alpha = 0.3,
+   #   width = 0.3, size = 0.8) +
+    # plot landmark time
+    geom_vline(
+      xintercept = t_landmark, 
+      color = "grey80", linetype = "dashed", size = 1, alpha = 1
+      ) + 
+    geom_line(
+      aes(linetype = method),
+      alpha = 0.8, size = 0.8
+      ) +
+    geom_point(
+      aes(shape = method), 
+      alpha = 0.8, size = 2.5
+      ) +
+    # label lines, but too congested
+#    geom_label_repel(
+#      aes(label = label),
+#      nudge_x = 1,
+#      na.rm = TRUE, ) +
+    scale_x_continuous(breaks = 1:15) + 
+  #  scale_y_continuous(breaks = 0:10 / 10) +
+#    coord_cartesian(ylim = c(0, NA)) +
+    coord_cartesian(
+      xlim = c(1, 15),
+      ylim = c(0, 0.25)
+      ) +
+    ggsci::scale_color_lancet() +
+    xlab("Year from baseline") + ylab("Brier score") +
+    labs(
+      title = g_title,
+      subtitle = paste("at landmark time", t_landmark),
+      caption = g_caption,
+  #    caption = "Error bar represents the max and min",
+  #    linetype = "number of (candidate) baseline covariates",
+      color = "Method variant",
+      linetype = "Method",
+      shape = "Method"
+    )  +
+    theme_pubr() +
+    theme(
+      legend.position = "right", 
+      legend.box = "vertical",
+      panel.grid.major.y = element_line(color = "grey60")
+      ) 
+  
+  return(list(
+    landmark = t_landmark,
+    g = g
+  ))
+})
+```
+
+```{r, fig.width=12, fig.height=6}
+# Print
+for (x in list.g.brier) {
+  print(x$g)
+}
+
+# for (x in list.g.brier) {
+#   ggsave(
+#     filename = paste0("compare_brier_lm", x$landmark, ".png"),
+#     plot = x$g,
+#     device = "png",
+#     path = "./figure/compare_brier/",
+#     width = 12, height = 6
+#   )
+# }
+
+```
+
+

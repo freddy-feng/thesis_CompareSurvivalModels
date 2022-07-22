@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------------------------
 # Contains wrapper function, utility function for running experiment using pencal library
 # ------------------------------------------------------------------------------------------------
-install.packages("pencal", )
+#install.packages("./package/pencal_1.2.2.tar.gz", repos = NULL, type="source")
 require(tidyverse)
 require(pencal)
 print(paste("pencal version =", packageVersion("pencal")))

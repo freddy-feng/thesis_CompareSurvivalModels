@@ -26,23 +26,26 @@ select <- dplyr::select
 # -----------------------------------------------------------------------------------
 n_fold <- 10 # Cross validation
 n_RCV <- 10 # Repeated CV, set to 1 to single CV
-T_LMs <- c(2) # Vector of landmark times
+T_LMs <- c(2, 3, 4, 5, 6) # Vector of landmark times
 
 seeds <- 721:(721+n_RCV-1) # Seeds for RCV
 
 # -----------------------------------------------------------------------------------
 # Set model hyperparam
 
-
 method <- "MFPCCox"
   
 pve <- 0.7 # Hyperparam to choose number of pc
 nbasis <- 3 # Mean function
 
-method <- paste(c(
+add.label <- NULL
+
+method.full <- paste(c(
   method,
   paste0("pve", as.character(pve*100)), 
-  paste0("nbasis", as.character(nbasis))),
+  paste0("nbasis", as.character(nbasis)),
+  add.label
+  ),
   collapse = "_")
 
 
@@ -72,6 +75,7 @@ for (T.start in T_LMs) {
   
   model.hyperparam <- list(
     method = method,
+    method.full = method.full,
     pve = pve,
     nbasis = nbasis,
     set_scenario = set_scenario,
@@ -81,7 +85,7 @@ for (T.start in T_LMs) {
   )
 
   hyperparam <- paste(c(set_scenario, n_basecov, is_transformed, is_scaled), collapse = "_") # Use hyperparam to describe model
-  model.name <- paste(c(method, landmark, hyperparam), collapse = "_")
+  model.name <- paste(c(method.full, landmark, hyperparam), collapse = "_")
   # -----------------------------------------------------------------------------------
   
   # -----------------------------------------------------------------------------------
@@ -182,7 +186,12 @@ for (T.start in T_LMs) {
     print("[Remind] pCox method is used, the additional covariates will be updated")
   }
   # -----------------------------------------------------------------------------------
-  
+  # Shift timescale T.start -> 0
+  deltaT <- deltaT - T.start
+  data.surv$time <- data.surv$time - T.start
+  data.long$time <- data.long$time - T.start
+  data.long$Years.bl <- data.long$Years.bl - T.start
+#  data.long$Y <- data.long$Y - T.start # NB: MFPCCox use Y as time variable
   # -----------------------------------------------------------------------------------
   # MFPCCox only - Format long data into 3-dim array
   # -----------------------------------------------------------------------------------
@@ -199,7 +208,6 @@ for (T.start in T_LMs) {
   
   # time variable for longitudinal variable y
   #y.t <- "Years.bl" # timestamp column name for long covariates
-  #y.t <- "M" # use months from baseline instead of years from baseline, less possible values in obstime
   y.t <- "Y" # generic, use years from baseline, rounded
   
   # To prevent a potential bug that the test set has a observed time different from the time domain
@@ -242,13 +250,13 @@ for (T.start in T_LMs) {
     
     # -----------------------------------------------------------------------------------
     # Save folds for training and future checking
-    subfolder <- "./output/temp/"
-    filename <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
-    path.template <- paste0(subfolder, filename)
-    
-    save(folds, file = path.template)
-    
-    print(paste("template of folds saved to path:", path.template))
+    # subfolder <- "./output/temp/"
+    # filename <- paste0("output_folds_template_", set_scenario, "_seed", seed, "_", landmark, "_", is_transformed, ".RData")
+    # path.template <- paste0(subfolder, filename)
+    # 
+    # save(folds, file = path.template)
+    # 
+    # print(paste("template of folds saved to path:", path.template))
     
     # -----------------------------------------------------------------------------------
     # You may want to double check data.long and data.surv before proceeding to training.
@@ -269,11 +277,11 @@ for (T.start in T_LMs) {
     print(paste("Begin training for model:", model.name))
     # -----------------------------------------------------------------------------------
     # -----------------------------------------------------------------------------------
-    rm("folds")
-    rm("folds.eval")
-    
-    print(path.template)
-    load(file = path.template) # Load folds template
+    # rm("folds")
+    # rm("folds.eval")
+    # 
+    # print(path.template)
+    # load(file = path.template) # Load folds template
     
     folds.eval <- vector(mode = "list", length = n_fold)
     # -----------------------------------------------------------------------------------
@@ -458,7 +466,7 @@ for (T.start in T_LMs) {
       )
       # -----------------------------------------------------------------------------------
       # -----------------------------------------------------------------------------------
-      # MFPCCox Specific - Compute Brier score (work in progress!!!!!!!!!!!!!!!!!!!!!!!)
+      # MFPCCox Specific - Compute Brier score
       # -----------------------------------------------------------------------------------
       
       # pec will return error if the prediction time exceeds the latest survival time in test set
@@ -473,7 +481,8 @@ for (T.start in T_LMs) {
         res.bs <- pec::pec(
           # A matrix with predicted probabilities, dimension of n subjects by m times 
           object = list("model" = folds[[i]]$model$mfpccox),
-          formula = Surv(time, event) ~ AGE,
+#          formula = Surv(time, event) ~ AGE,
+          formula = Surv(time, event) ~ AGE + PTGENDER + PTEDUCAT + status.bl + APOE4,
           data = tmp.surv.data, # For computing IPCW
           exact = FALSE, # Do not predict at event times
           times = pec.times, 

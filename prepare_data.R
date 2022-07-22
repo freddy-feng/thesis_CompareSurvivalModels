@@ -187,7 +187,7 @@ df.dementia <- df.clean %>%
 # Temp part to check the filter DX==NA
 df.censored <- df.clean %>%
   filter(!(RID %in% df.dementia$RID), VISCODE != "bl") %>% # Censored outcome after baseline
-#  filter(!(is.na(DX))) %>% # Non-NA, DX should be either CN or MCI
+  filter(!(is.na(DX))) %>% # Ignore DX==NA visits because the status cannot be determined
   group_by(RID) %>%
   dplyr::summarize(
     time = max(Years.bl), # Latest follow up in years from baseline
