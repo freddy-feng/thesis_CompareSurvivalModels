@@ -69,7 +69,7 @@ Root
             - "scenario0": do not use any longitudinal covariates
 
 ## Step 4 - Compare results
-- Open `run_comparison.Rmd`.
+- Open `run_comparison_thesis.Rmd`.
 - Evaluation files i.e. the `folds.eavl` saved in subfolder `./output/` will be loaded, aggregated, and compared.
 - The results are used to reproduce figures in the thesis.
 
