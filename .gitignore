@@ -6,3 +6,7 @@
 *.gz
 *.tex
 *.png
+*/data_cleaned
+*/package
+*/presentation
+*/table

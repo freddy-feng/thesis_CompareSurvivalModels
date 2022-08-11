@@ -84,32 +84,32 @@ vars_long
 # Table: data format
 
 ```{r}
-example.id <- 5 
+example.ids <- c(5, 41)
 
 
 example.raw <- ADNIMERGE::adnimerge %>%
-  filter(RID == example.id) %>%
-  select(RID, VISCODE, EXAMDATE, Years.bl, DX.bl, DX, AGE, PTGENDER, ADAS13) %>%
-  head(3)
+  filter(RID %in% example.ids) %>%
+  group_by(RID) %>%
+  select(RID, VISCODE, EXAMDATE, Years.bl, DX.bl, DX, AGE, PTGENDER, ADAS13, MMSE)
   
 
 example.surv <- df.surv_preds %>%
-  filter(RID == example.id) %>%
-  select(RID, time, event, DX.bl, AGE, PTGENDER, ADAS13)
+  filter(RID %in% example.ids) %>%
+  select(RID, time, event, status.bl, AGE, PTGENDER, ADAS13, MMSE)
 
 example.long <- df.long_censored %>%
-  filter(RID == example.id) %>%
-  select(RID, VISCODE, Years.bl, DX.bl, AGE, PTGENDER, ADAS13) %>%
-  head(3)
+  filter(RID %in% example.ids) %>%
+  group_by(RID) %>%
+  select(RID, VISCODE, Years.bl, status.bl, AGE, PTGENDER, ADAS13, MMSE)
 
 
-rm(example.id)
+rm(example.ids)
 
 ```
 
 ```{r}
 title.table <- "Example of raw data"
-latex(example.raw, digits = 3,
+Hmisc::latex(example.raw, digits = 3,
       title = title.table,
       caption = title.table,
       booktabs = TRUE,
@@ -119,7 +119,7 @@ latex(example.raw, digits = 3,
       legend.bottom = TRUE)
 
 title.table <- "Example of surv data"
-latex(example.surv, digits = 3,
+Hmisc::latex(example.surv, digits = 3,
       title = title.table,
       caption = title.table,
       booktabs = TRUE,
@@ -129,7 +129,7 @@ latex(example.surv, digits = 3,
       legend.bottom = TRUE)
 
 title.table <- "Example of long data"
-latex(example.long, digits = 3,
+Hmisc::latex(example.long, digits = 3,
       title = title.table,
       caption = title.table,
       booktabs = TRUE,
@@ -237,6 +237,181 @@ df.tmp %>%
     visits.max = max(visits.subject),
     visits.min = min(visits.subject)
   )
+```
+
+# Table: summary of observed events
+
+```{r}
+table.eventrate_lm <- data.frame(do.call(
+  "rbind",
+  lapply(
+    2:6, function(t_l) {
+      df.surv_preds %>%
+        filter(time > t_l) %>%
+        select(status) %>%
+        table() %>%
+        t()
+    }
+  )
+))
+
+
+table.eventrate_lm2 <- data.frame(do.call(
+  "rbind",
+  lapply(
+    2:6, function(t_l) {
+      df.surv_preds %>%
+        filter(time > t_l) %>%
+        summarize(
+          "Avg time to event after landmark" = round(mean(time), 1) - t_l
+        )
+    }
+  )
+))
+  
+table.eventrate_lm$`Landmark time` <- 2:6
+
+table.eventrate_lm <- table.eventrate_lm %>%
+  mutate(
+    `Event rate` = round(dementia / (censored + dementia), 3)
+  ) %>%
+  select("Landmark time", "censored", "dementia", "Event rate")
+
+table.eventrate_lm <- table.eventrate_lm %>%
+  cbind(table.eventrate_lm2)
+
+
+table.eventrate_lm
+
+Hmisc::latex(
+  object = table.eventrate_lm,
+  title = "Event rate at different landmark times",
+  label = "tab:events_lms",
+  caption = "Event rate at different landmark times",
+  rowlabel = NULL,
+  booktabs = TRUE
+)
+
+```
+
+
+# Table: Number of repeated measurements at different landmark times
+
+```{r}
+table.rep_measure_lm <- do.call("rbind", lapply(
+  2:6, function(t_l) {
+  df.long_censored %>%
+    filter(time > t_l) %>%
+    filter(Years.bl < t_l) %>%
+    group_by(id) %>%
+    summarize(
+      across(all_of(vars_long), function(x) sum(!is.na(x)))
+    ) %>%
+    summarize(
+      across(-id, mean)
+    )
+  }
+))
+
+table.rep_measure_lm <- table.rep_measure_lm %>%
+  round(digits = 1)
+
+
+table.rep_measure_lm <- data.frame(t(table.rep_measure_lm))
+
+table.rep_measure_lm <- data.frame(
+  row.names(table.rep_measure_lm), table.rep_measure_lm, 
+  row.names = NULL
+)
+
+colnames(table.rep_measure_lm) <- c("Longitudinal covariate", 2:6)
+
+table.rep_measure_lm <- table.rep_measure_lm %>%
+  arrange(`Longitudinal covariate`)
+
+table.rep_measure_lm
+
+Hmisc::latex(
+  object = table.rep_measure_lm,
+  title = "Number of repeated measurements before the landmark time",
+  label = "tab:rep_measure_lms",
+  caption = "Number of repeated measurements before the landmark time",
+  rowlabel = NULL,
+  booktabs = TRUE
+)
+
+```
+
+## Figure: Number of repeated measurements at different landmark times
+
+```{r, fig.height=5, fig.width=4}
+vars_long_21 <- c(
+  "ADAS11",
+  "ADAS13",
+  "ADASQ4",
+  "CDRSB",  
+  "Entorhinal",
+  "FAQ",
+  'Fusiform',
+  "Hippocampus",
+  "ICV",
+  "LDELTOTAL",
+  "MidTemp",
+  "MMSE",
+  "mPACCtrailsB",
+  "mPACCdigit",
+  "RAVLT.forgetting",
+  "RAVLT.immediate",
+  "RAVLT.learning",
+  "RAVLT.perc.forgetting",
+  "TRABSCOR",
+  "WholeBrain",
+  "Ventricles"
+)
+
+
+g.rep_measure_lm <-  table.rep_measure_lm %>%
+  filter(`Longitudinal covariate` %in% vars_long_21) %>%
+  pivot_longer(
+    cols = -`Longitudinal covariate`, 
+    names_to = "Landmark time", 
+    values_to = "Avg repeated measurements"
+    ) %>%
+  mutate(
+    `Landmark time` = factor(as.numeric(`Landmark time`))
+  ) %>%
+  ggplot() + 
+    geom_point(
+      aes(
+        x = `Avg repeated measurements`,
+        y = `Longitudinal covariate`,
+        group = interaction(`Landmark time`, `Longitudinal covariate`),
+        color = `Landmark time`
+      ),
+#      position = position_dodge2(0.7), 
+      size = 2, alpha = 0.6
+    ) +
+    scale_x_continuous(breaks = 0:7, limits = c(0, 7)) +
+    ggsci::scale_color_lancet() +
+    theme_pubr() +
+    theme(
+      legend.position = "top",
+      legend.box = "vertical",
+      panel.grid.major.x = element_line(color = "grey80"),
+#      panel.grid.minor.x = element_line(color = "grey60"),
+      panel.grid.major.y = element_line(color = "grey80")
+    )
+  
+
+ggsave(
+    filename = paste0("repeated_measure_lms.png"),
+    plot = g.rep_measure_lm,
+    device = "png",
+    path = "./figure/",
+    width = 7, height = 7,
+    bg = "white"
+)
+
 ```
 
 
@@ -630,23 +805,37 @@ df.long %>%
 
 # Transformation
 
-## Table: transformation
+## Table: Transformation
 
 ```{r}
 load(file = "./output/temp/output_folds_template_scenario2_seed721_lm2_transformed.RData")
+
+missing_proportions <- folds[[1]]$missing_proportions
+colnames(missing_proportions) <- c("Covariate", "Proportion of subjects without any observations", "Average number of observation per subject")
+missing_proportions[,2:3] <- missing_proportions[,2:3] %>%
+  round(digits = 2)
 
 table.transformation <- transformation_summary %>%
   filter(var_name %in% missing_proportions$Covariate[1:21]) %>%
   select(var_name, transformation, skewness_t, skewness)
 table.transformation[3:4] <- table.transformation[3:4] %>%
   round(digits = 3)
-colnames(table.transformation) <- c("Covariate", "Transformed covariate", "Skewness (After)", "Skewness (Before)")
+colnames(table.transformation) <- c("Covariate", "Transformation", "Skewness (After)", "Skewness (Before)")
 
 table.transformation <- table.transformation %>%
   arrange(`Skewness (Before)`)
 
+table.transformation <- table.transformation %>%
+  select(Covariate, `Skewness (Before)`, Transformation, `Skewness (After)`)
+
+table.transformation$Transformation[is.na(table.transformation$Transformation)] <- "-"
+
+table.transformation$`Skewness (After)`[table.transformation$Transformation == "-"] <- "-"
+
+table.transformation
+
 title.table <- "Transformation of longitudinal covariates"
-latex(table.transformation, 
+Hmisc::latex(table.transformation, 
       digits = 3,
       title = title.table,
       caption = title.table,
