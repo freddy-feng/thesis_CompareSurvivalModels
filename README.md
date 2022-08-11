@@ -1,11 +1,16 @@
 # Introduction
-This folder contains the scripts for reproducing the results in my master theis "An empirical comparison of methods for the prediction of survival from many longitudinal covariates".
-The aim of the thesis is to empirically compare statistical methods for predicting the survival outcome using a large number of longitudinal covariates.
+This folder contains the scripts for reproducing the results in my master theis "An empirical comparison of methods for the prediction of survival from many longitudinal covariates".  
+The aim of the thesis is to empirically compare statistical methods for predicting the survival outcome using a large number of longitudinal covariates.  
 Four methods were compared:
 - pCox-baseline - penalized Cox model using baseline measurements only
 - pCox-landmarking - penalized Cox model using last observations carried forward
 - PRC-LMM - penalized regression calibration (Signorelli et al., 2019, https://onlinelibrary.wiley.com/doi/full/10.1002/sim.9178)
-- MFPCCox - multivariate functional principal component analysis and Cox regression (Li et al., 2019, https://onlinelibrary.wiley.com/doi/abs/10.1002/sim.8334)
+- MFPCCox - multivariate functional principal component analysis and Cox regression (Li et al., 2019, https://onlinelibrary.wiley.com/doi/abs/10.1002/sim.8334)  
+There are various types of scripts in this repo, indicated by their prefixes:
+- `function_`: wrapper functions for model training, evaluation; utility functions for data preparation, processing result.
+- `prepare_data`: preparation of raw data into cleaned data used for model fitting
+- `run_`: running RCV to estimate the predictive performance of each method; result comparisons
+- `IDA_`: exploratory data analysis, to produce some figures and tables presented in the thesis
 
 # Acknowledgement
 The scripts for MFPCCox was based on the implementation of MFPCCox https://github.com/kan-li/MFPCCox and adapted for application to ADNI data.
