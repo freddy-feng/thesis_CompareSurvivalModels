@@ -121,12 +121,12 @@ list.tdauc.lms <- lapply(2:6, function(T.start) {
 for (x in list.tdauc.lms) {
   x$df.tdauc.compare %>%
     group_by(method, model.name) %>%
-    summarize(n(), .groups = "drop") %>%
+    summarise(n(), .groups = "drop") %>%
     print()
 }
 ```
 
-## Fig: tdAUC | LM (WARNING: group by method, not method.full)
+## [fig:thesis] tdAUC | LM (WARNING: group by method, not method.full)
 
 ```{r}
 g_title <- "Comparison of estimated Brier score under repeated 10-fold CV"
@@ -237,13 +237,26 @@ g.tdauc.combined <- ggpubr::ggarrange(
 )
 
 ggsave(
-  filename = "compare_tdauc_combined.png",
+  filename = "compare_tdauc_combined_short.png",
   plot = g.tdauc.combined,
   device = "png", 
   path = "./figure/compare_tdauc/",
-  width = 10, height = 12,
+  width = 10, height = 9,
   bg = "white"
 )
+```
+
+
+## [fig:slide] tdAUC | lm2, 6
+
+```{r, fig.width=7.5, fig.height=3, fig}
+ggarrange(
+  plotlist = list(list.g.tdauc[[1]]$g, list.g.tdauc[[5]]$g), 
+  nrow = 1, 
+  common.legend = TRUE
+  )
+
+
 ```
 
 
@@ -369,106 +382,7 @@ df.c.index.compare %>%
     print()
 ```
 
-## Figure: C index | LM (group by method)
-group by method is not method.full
-```{r}
-# --------------------------------------------------
-# Plot df.c.index.compare
-# --------------------------------------------------
-g_caption <- paste0(
-  "CV repeated with 10 different seeds.\n",
-  "Box plot refer to the IQR (from first to third percentile).\n",
-  "Whiskers extend from 1.5*IQR for either end of the IQR box."
-  )
-
-g_title <- "Comparison of estimated C-index under repeated 10-fold CV"
-
-labels.method <- c("MFPCCox", "pCox-baseline", "pCox-landmarking", "PRC-LMM")
-# --------------------------------------------------
-# https://ggplot2.tidyverse.org/reference/geom_boxplot.html
-list.g.c <- lapply(2:6, function(t_landmark) {
-    g <- df.c.index.compare %>%
-    filter(landmark == paste0("lm", t_landmark)) %>%
-    # filter(grepl(model, pattern = "scaled")) %>% # dumb method to filter based on method.full
-    # filter(grepl(model, pattern = "scenario2")) %>%
-  #  filter(scenario == "scenario2" | scenario == "scenario0") %>%
-  #  filter(method == "pCox-lm" | method == "pencal" | method == "pCox-bl" | method == "pencal-min" | method == "pencal-1se") %>%
-    ggplot(aes(
-      x = method, 
-      y = c.index, 
-      fill = method,
-      color = method)) + 
-      geom_point(
-        aes(shape = method),
-        position = position_jitter(seed = 1, width = 0.2),
-        alpha = 0.2, 
-        size = 1
-        ) +
-      geom_violin(
-        color = NA,
-        width = 0.5, 
-        alpha = 0.2
-        ) + 
-      geom_boxplot(
-        fill = "white",
-        lwd = 0.8,
-        width = 0.1,
-        alpha = 1,
-        outlier.shape = NA
-        ) + 
-      coord_cartesian(ylim = c(0.5, 1)) +
-      ggsci::scale_color_lancet() +
-      ggsci::scale_fill_lancet() +
-      xlab("") + ylab("C-index") +
-      labs(
-        title = paste("Landmark time =", t_landmark),
-#        caption = g_caption,
-        color = "Method",
-        fill = "Method",
-        shape = "Method"
-        ) + 
-      theme_pubr() +
-      theme(
-        legend.position = "right",
-        legend.box = "vertical",
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank(),
-        panel.grid.major.x = element_blank(),
-        panel.grid.minor.x = element_blank(),
-        panel.grid.major.y = element_line(color = "grey60"),
-        panel.grid.minor.y = element_line(color = "grey80")
-      )
-    
-    return(g)
-})
-```
-
-Inspect per landmark time
-```{r, fig.width=12, fig.height=6}
-list.g.c[[1]]
-```
-
-
-```{r, fig.width=16, fig.height=8}
-g.c.wrapped <- ggpubr::ggarrange(
-  plotlist = list.g.c, 
-  ncol = 3, nrow = 2, 
-  common.legend = TRUE
-)
-
-g.c.wrapped
-
-ggsave(
-    filename = paste0("compare_c_wrapped.png"),
-    plot = g.c.wrapped,
-    device = "png",
-    path = "./figure/compare_c/",
-    width = 16, height = 8,
-    bg = "white"
-)
-```
-
-## Figure: combined C index | LM (group by method)
+## [fig:thesis] combined C index | LM (group by method)
 ```{r, fig.width=16, fig.height=8}
 g_caption <- paste0(
   "CV repeated with 10 different seeds.\n",
@@ -529,16 +443,126 @@ g.c.combined <- df.c.index.compare %>%
 g.c.combined
 
 ggsave(
-    filename = paste0("compare_c_combined.png"),
+    filename = paste0("compare_c_combined_short.png"),
     plot = g.c.combined,
     device = "png",
     path = "./figure/compare_c/",
-    width = 12, height = 4,
+    width = 12, height = 3.5,
     bg = "white"
 )
 ```
 
-## Table: C index
+### [fig:slide]
+
+```{r, fig.width=7.5, fig.height=3}
+g.c.combined +
+  theme(
+    legend.position = "none"
+  )
+```
+
+
+## alternative style: C index | LM (group by method)
+group by method is not method.full
+```{r}
+# --------------------------------------------------
+# Plot df.c.index.compare
+# --------------------------------------------------
+g_caption <- paste0(
+  "CV repeated with 10 different seeds.\n",
+  "Box plot refer to the IQR (from first to third percentile).\n",
+  "Whiskers extend from 1.5*IQR for either end of the IQR box."
+  )
+
+g_title <- "Comparison of estimated C-index under repeated 10-fold CV"
+
+labels.method <- c("MFPCCox", "pCox-baseline", "pCox-landmarking", "PRC-LMM")
+# --------------------------------------------------
+# https://ggplot2.tidyverse.org/reference/geom_boxplot.html
+list.g.c <- lapply(2:6, function(t_landmark) {
+    g <- df.c.index.compare %>%
+      filter(landmark == paste0("lm", t_landmark)) %>%
+      # filter(grepl(model, pattern = "scaled")) %>% # dumb method to filter based on method.full
+      # filter(grepl(model, pattern = "scenario2")) %>%
+    #  filter(scenario == "scenario2" | scenario == "scenario0") %>%
+    #  filter(method == "pCox-lm" | method == "pencal" | method == "pCox-bl" | method == "pencal-min" | method == "pencal-1se") %>%
+      ggplot(aes(
+        x = method, 
+        y = c.index, 
+        fill = method,
+        color = method)) + 
+        geom_point(
+          aes(shape = method),
+          position = position_jitter(seed = 1, width = 0.2),
+          alpha = 0.2, 
+          size = 1
+          ) +
+        geom_violin(
+          color = NA,
+          width = 0.5, 
+          alpha = 0.2
+          ) + 
+        geom_boxplot(
+          fill = "white",
+          lwd = 0.8,
+          width = 0.1,
+          alpha = 1,
+          outlier.shape = NA
+          ) + 
+        coord_cartesian(ylim = c(0.5, 1)) +
+        ggsci::scale_color_lancet() +
+        ggsci::scale_fill_lancet() +
+        xlab("") + ylab("C-index") +
+        labs(
+          title = paste("Landmark time =", t_landmark),
+  #        caption = g_caption,
+          color = "Method",
+          fill = "Method",
+          shape = "Method"
+          ) + 
+        theme_pubr() +
+        theme(
+          legend.position = "right",
+          legend.box = "vertical",
+          axis.ticks.x = element_blank(),
+          axis.text.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          panel.grid.major.y = element_line(color = "grey60"),
+          panel.grid.minor.y = element_line(color = "grey80")
+        )
+    
+    return(g)
+})
+```
+
+Inspect per landmark time
+```{r, fig.width=12, fig.height=6}
+list.g.c[[1]]
+```
+
+
+```{r, fig.width=16, fig.height=8}
+g.c.wrapped <- ggpubr::ggarrange(
+  plotlist = list.g.c, 
+  ncol = 3, nrow = 2, 
+  common.legend = TRUE
+)
+
+g.c.wrapped
+
+ggsave(
+    filename = paste0("compare_c_wrapped.png"),
+    plot = g.c.wrapped,
+    device = "png",
+    path = "./figure/compare_c/",
+    width = 16, height = 8,
+    bg = "white"
+)
+```
+
+
+## [tab:thesis] C index
 ```{r}
 table.c.index <- df.c.index.compare %>%
   group_by(landmark, method) %>%
@@ -645,7 +669,7 @@ for (x in list.brier.lms) {
 }
 ```
 
-## Fig: BS | LM (group by method)
+## [fig:thesis] BS | LM (group by method)
 ```{r}
 g_title <- "Comparison of estimated Brier score under repeated 10-fold CV"
 g_caption <- paste0(
@@ -773,13 +797,39 @@ g.brier.combined <- ggpubr::ggarrange(
 )
 
 ggsave(
-  filename = "compare_brier_combined.png",
+  filename = "compare_brier_combined_short.png",
   plot = g.brier.combined,
   device = "png", 
   path = "./figure/compare_brier/",
-  width = 10, height = 12,
+  width = 10, height = 9,
   bg = "white"
 )
 ```
 
+## [fig:slide] BS | lm2, 6
 
+```{r, fig.width=7.5, fig.height=3, fig}
+
+list.g.brier.temp <- list(
+  list.g.brier[[1]]$g + 
+    coord_cartesian(
+      xlim = c(1, 15),
+      ylim = c(0, 0.16)
+      ), 
+  list.g.brier[[5]]$g + 
+    coord_cartesian(
+      xlim = c(1, 15),
+      ylim = c(0, 0.16)
+      )
+)
+
+
+
+ggarrange(
+  plotlist = list.g.brier.temp, 
+  nrow = 1, 
+  common.legend = TRUE
+  )
+
+
+```
