@@ -30,6 +30,9 @@ library(Hmisc)
 #library(ADNIMERGE)
 
 source("function_utility.R") # Utility functions
+
+conflicted::conflict_prefer("summarize", "dplyr")
+conflicted::conflict_prefer("summarise", "dplyr")
 ```
 
 # Import data
@@ -474,11 +477,24 @@ missingess.long <- df.long_censored %>%
   select(all_of(vars_long)) %>%
   naniar::vis_miss(sort_miss = TRUE)
 
-ggsave(
-  filename = "missingness_surv.png", plot = missingness.surv, device = "png", path = "./figure/", width = 8)
+# adjust margin
+missingess.long <- missingess.long +
+  theme(plot.margin = margin(t = 0, r = 70, b = 0, l = 0, unit = "pt"))
+```
 
+```{r}
+# save missing plot for baseline cov
+#ggsave(
+#  filename = "missingness_surv.png", plot = missingness.surv, device = "png", path = "./figure/", width = 8)
+
+# save missing plot for long covs
 ggsave(
-  filename = "missingness_long.png", plot = missingess.long, device = "png", path = "./figure/", width = 8)
+  filename = "missingness_long.png", 
+  plot = missingess.long, 
+  device = "png", 
+  path  = "./figure/", 
+  width = 8, height = 6,
+  bg = "white")
 ```
 
 
@@ -1279,7 +1295,7 @@ should use adjusted for age instead. fit cox model.
 - msm routine estimates time until progress occured. survfit estimates time until progress was observed.
 - Aalen-Johansen method used by survfit does not account for interval censoring.
 
-## Figure: KM cumhaz
+## [fig:thesis] KM cumhaz
 
 https://rpkgs.datanovia.com/survminer/
 ```{r}
@@ -1291,7 +1307,7 @@ list.cumhaz[[1]] <- ggsurvplot(
     fun = "cumhaz",
     xlab = "Follow up time in years", title = "Gender",
     break.time.by = 3,
-    ncensor.plot = TRUE, ncensor.plot.height = 0.25,
+    ncensor.plot = FALSE, ncensor.plot.height = 0.25,
     conf.int = TRUE,
     risk.table = FALSE, cumevents = TRUE,
     palette = "aaas")
@@ -1302,7 +1318,7 @@ list.cumhaz[[2]] <- ggsurvplot(
     fun = "cumhaz",
     xlab = "Follow up time in years", title = "No. of APOE4 allele",
     break.time.by = 3,
-    ncensor.plot = TRUE, ncensor.plot.height = 0.25,
+    ncensor.plot = FALSE, ncensor.plot.height = 0.25,
     conf.int = TRUE,
     risk.table = FALSE, cumevents = TRUE,
     palette = "lancet")
@@ -1313,7 +1329,7 @@ list.cumhaz[[3]] <- ggsurvplot(
     fun = "cumhaz",
     xlab = "Follow up time in years", title = "Baseline diagnosis",
     break.time.by = 3,
-    ncensor.plot = TRUE, ncensor.plot.height = 0.25,
+    ncensor.plot = FALSE, ncensor.plot.height = 0.25,
     conf.int = TRUE,
     risk.table = FALSE, cumevents = TRUE,
     palette = "lancet")
@@ -1328,7 +1344,7 @@ ggsave(
   plot = g, 
   device = "png",
   path = "./figure/",
-  width = 12, height = 12
+  width = 12, height = 14
 )
 
 # Stratified version
@@ -1360,6 +1376,7 @@ ggsave(
 
 ```
 
+## types of curve
 
 ```{r}
 # Check visually
@@ -1375,7 +1392,7 @@ ggsurvplot(survfit(Surv(time, status == "dementia") ~ 1,
            fun = "cumhaz") # Cumulative hazard
 ```
 
-
+## by gender
 
 ```{r, fig.height=6}
 x <- "PTGENDER"
@@ -1392,6 +1409,7 @@ ggsurvplot(
 rm(x)
 ```
 
+## by APOE4
 
 ```{r, fig.height=6}
 # Known genetic risk factor
@@ -1402,6 +1420,9 @@ ggsurvplot(survfit(Surv(time, status=="dementia") ~ APOE4,
 ```
 
 
+
+
+
 ```{r, fig.height=8}
 ggsurvplot(survfit(Surv(time, status=="dementia") ~ status.bl,
                    data = df.surv_preds),
@@ -1410,19 +1431,37 @@ ggsurvplot(survfit(Surv(time, status=="dementia") ~ status.bl,
            title = "KM curve by baseline diagnosis")
 ```
 
-```{r, fig.height=8}
-ggsurvplot(survfit(Surv(time, status=="dementia") ~ ORIGPROT,
-                   data = df.surv_preds),
-           conf.int = TRUE,
-           risk.table = TRUE)
+## [fig:slide] KM surv
+
+```{r, fig.width=8, fig.height=4.5}
+ggsurvplot(
+    survfit(Surv(time, status=="dementia") ~ status.bl,
+                     data = df.surv_preds),
+    fun = "pct",
+    xlab = "Follow up time in years",
+    break.time.by = 2,
+#    ncensor.plot = FALSE, ncensor.plot.height = 0.25,
+    conf.int = TRUE,
+    risk.table = TRUE, cumevents = FALSE, 
+    palette = "lancet", cumcensor = FALSE,
+    legend = "right", 
+    ggtheme = theme_pubclean(),
+    tables.theme = theme_survminer()
+)
 ```
 
-```{r, fig.height=8}
-# This is dubious! Time-dependent? or assume it's baseline. How to interpret?
-ggsurvplot(survfit(Surv(time, status=="dementia") ~ DX.bl,
-                   data = df.surv_preds),
-           conf.int = TRUE,
-           risk.table = TRUE)
+```{r, fig.width=10, fig.height=5}
+ggsurvplot(
+    survfit(Surv(time, status=="dementia") ~ status.bl,
+                     data = df.surv_preds),
+    fun = "pct",
+    xlab = "Follow up time in years",
+    break.time.by = 2,
+#    ncensor.plot = FALSE, ncensor.plot.height = 0.25,
+    conf.int = TRUE,
+    risk.table = FALSE, cumevents = TRUE, 
+    palette = "lancet", cumcensor = TRUE)
+
 ```
 
 # Progression of ADAS13 compared to diagnosis
@@ -1575,6 +1614,7 @@ plots <- lapply(plot_covariates, function(feature){
 plots
 
 ```
+### [fig:thesis] example of long covs
 
 ```{r, fig.width=8, fig.height=4}
 # Spaghetti plots of selected covariates
@@ -1586,7 +1626,7 @@ random_RID <- df.surv_preds$RID %>% sample(size)
 
 plot_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ", "MidTemp")
 
-plots <- lapply(plot_covariates, function(feature){
+list.g.trajectories <- lapply(plot_covariates, function(feature){
   df.long_censored %>%
     filter(RID %in% random_RID) %>%
     filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
@@ -1602,8 +1642,9 @@ plots <- lapply(plot_covariates, function(feature){
       #scale_y_continuous(limits = c(0, NA)) + 
       facet_wrap(vars(status.bl), nrow = 1) + 
       labs(
-        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis for", size, "random subjects"),
-        caption = "Baseline diagnosis - cognitive normal (left panel), mild cognitive impairment (right panel)",
+        title = feature,
+#        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis for", size, "random subjects"),
+#        caption = "Baseline diagnosis - cognitive normal (left panel), mild cognitive impairment (right panel)",
         x = "Years after baseline",
         y = feature,
         shape = "Outcome",
@@ -1615,17 +1656,83 @@ plots <- lapply(plot_covariates, function(feature){
       ) +
       theme_pubr()
 })
+```
 
-#plots # show all
+save outputs, show only 1 covariate
+```{r}
+ggsave(
+  filename = "spaghetti_separate.png",
+  plot = list.g.trajectories[[1]], device = "png", path = "./figure/", width = 10, height = 4, bg = "white"
+)
+```
 
+
+save outputs, show only 2 covariates, combined plots
+```{r}
 g <- ggpubr::ggarrange(
-  plotlist = list(plots[[1]], plots[[6]]), ncol = 1, widths = 10
+  plotlist = list(list.g.trajectories[[1]], list.g.trajectories[[6]]), 
+  ncol = 1, widths = 10,
+  labels = "AUTO"
 )
 
 ggsave(
   filename = "spaghetti_combined.png",
-  plot = g, device = "png", path = "./figure/", width = 10, height = 10, bg = "white"
+  path = "./figure/", 
+  plot = g, device = "png", 
+  width = 10, height = 12, 
+  bg = "white"
 )
+```
+
+### [fig:slide] ADAS13
+```{r, fig.width=8, fig.height=4}
+# Spaghetti plots of selected covariates
+# Broken lines due to NAs
+set.seed(721)
+
+size <- 50
+random_RID <- df.surv_preds$RID %>% sample(size)
+
+plot_covariates <- c("ADAS13", "MMSE", "RAVLT.immediate", "RAVLT.learning", "FAQ", "MidTemp")
+
+list.g.trajectories <- lapply(plot_covariates, function(feature){
+  df.long_censored %>%
+    filter(RID %in% random_RID) %>%
+    filter(time > Years.bl) %>% # Display measurement before event only i.e. time to event > follow up time
+    ggplot() +
+      # Base plot all subjects
+      geom_line(aes(Years.bl, get(feature), group = RID), 
+                alpha = 0.08,
+                data = df.long_censored) + 
+      geom_line(aes(Years.bl, get(feature), group = RID, linetype = status, color = status),
+                alpha = 0.5,
+                size = 0.7) +
+      geom_point(aes(Years.bl, get(feature), group = RID, shape = status, color = status),
+                alpha = 1) +
+      #scale_y_continuous(limits = c(0, NA)) +
+      scale_x_continuous(breaks = 0:8 * 2) +
+      ggsci::scale_color_lancet() +
+      facet_wrap(vars(status.bl), nrow = 1) + 
+      labs(
+        title = feature,
+#        title = paste("Spaghetti chart of", feature, "over time by baseline diagnosis for", size, "random subjects"),
+#        caption = "Baseline diagnosis - cognitive normal (left panel), mild cognitive impairment (right panel)",
+        x = "Years after baseline",
+        y = feature,
+        shape = "Outcome",
+        color = "Outcome",
+        linetype = "Outcome"
+      ) +
+      theme(
+        legend.position = "bottom"
+      ) +
+      theme_pubr()
+})
+```
+
+```{r, fig.width=7.5, fig.height=3}
+list.g.trajectories[[1]] + 
+  theme(title = element_blank())
 ```
 
 
